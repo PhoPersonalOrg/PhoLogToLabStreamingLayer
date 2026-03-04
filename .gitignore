@@ -8,3 +8,4 @@ desktop.ini
 .venv.7z
 .cursor/debug.log
 .env
+templating/uv_deps_switcher/backups/pyproject.toml.bak
