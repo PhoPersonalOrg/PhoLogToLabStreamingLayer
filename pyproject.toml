@@ -5,7 +5,7 @@ description = "a complete but minimal python app that allows the user to take ti
 readme = "README.md"
 requires-python = ">=3.10,<3.11"
 dependencies = [
-    "attrs>=22.2.0",
+    "attrs>=22.2.0,<23",
     "comtypes>=1.4.13; platform_system == 'Windows'",
     "cython>=3.1.4",
     "dtw-python",
@@ -25,7 +25,10 @@ dependencies = [
     "setuptools>=80.9.0",
     "sounddevice>=0.5.3",
     "soundfile>=0.13.1",
-    "torch>=2.7.1; platform_system == 'Darwin' and platform_machine == 'x86_64'",
+    # "torch>=2.7.1; platform_system == 'Darwin' and platform_machine == 'x86_64'",
+    "torch>=2.7.1; platform_system != 'Darwin' or platform_machine != 'x86_64'",
+    "torch>=2.0.0,<2.1.0; platform_system == 'Darwin' and platform_machine == 'x86_64'",
+    # "torch; platform_system != 'Darwin' or platform_machine != 'x86_64'",
     "wheel>=0.45.1",
     "whisper-timestamped",
     "phopylslhelper>=0.1.3",
