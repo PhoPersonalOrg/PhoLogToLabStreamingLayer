@@ -5,7 +5,7 @@ description = "a complete but minimal python app that allows the user to take ti
 readme = "README.md"
 requires-python = ">=3.10,<3.11"
 dependencies = [
-    "attrs>=25.3.0",
+    "attrs>=22.2.0",
     "comtypes>=1.4.13; platform_system == 'Windows'",
     "cython>=3.1.4",
     "dtw-python",
@@ -26,7 +26,6 @@ dependencies = [
     "sounddevice>=0.5.3",
     "soundfile>=0.13.1",
     "torch>=2.7.1; platform_system == 'Darwin' and platform_machine == 'x86_64'",
-    "torch; platform_system != 'Darwin' or platform_machine != 'x86_64'",
     "wheel>=0.45.1",
     "whisper-timestamped",
     "phopylslhelper>=0.1.3",
@@ -42,6 +41,10 @@ packages = ["src/phologtolabstreaminglayer"]
 
 
 [tool.uv]
+environments = [
+    "sys_platform == 'win32'",
+    "sys_platform == 'linux'",
+]
 dev-dependencies = [
     "pytest>=7.0.0",
     "black>=23.0.0",
@@ -56,3 +59,12 @@ logger_app = "logger_app:console_main"
 lab-recorder-python = { path = "../lab-recorder-python", editable = true }
 whisper-timestamped = { path = "../whisper-timestamped", editable = true }
 phopylslhelper = { path = "../PhoPyLSLhelper", editable = true }
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["win-64"]
+
+[tool.pixi.pypi-dependencies]
+phologtolabstreaminglayer = { path = ".", editable = true }
+
+[tool.pixi.tasks]

@@ -9,3 +9,6 @@ desktop.ini
 .cursor/debug.log
 .env
 templating/uv_deps_switcher/backups/pyproject.toml.bak
+# pixi environments
+.pixi/*
+!.pixi/config.toml
