@@ -6,8 +6,9 @@ This enhanced version of the LSL Logger App includes system tray functionality a
 ## New Features
 
 ### 1. System Tray Integration
-- **Minimize to Tray**: Click the "Minimize to Tray" button or close the window (X) to minimize the app to the system tray
-- **Tray Icon**: The app continues running in the background with a system tray icon
+- **Minimize to Tray**: Click the "Minimize to Tray" button on the Recording tab to hide the main window while the app keeps running
+- **Close (X)**: Closes the application completely (stops recording, transcription, and tray)
+- **Tray Icon**: The app continues running in the background with a system tray icon when minimized
 - **Tray Menu**: Right-click the tray icon for options:
   - Show App: Restore the main window
   - Quick Log: Open the quick log entry popover
@@ -15,7 +16,8 @@ This enhanced version of the LSL Logger App includes system tray functionality a
 - **Double-click**: Double-click the tray icon to restore the main window
 
 ### 2. Global Hotkey Support
-- **Hotkey**: Press `Ctrl+Alt+L` from anywhere to summon a quick log entry popover
+- **Hotkey**: `Ctrl+Alt+L` can summon a quick log entry popover (disabled by default; set `GlobalHotkeyMixin.should_register_global_hotkey = True` on `LoggerApp` to enable)
+- **Quick Log via tray**: Right-click the tray icon and choose **Quick Log** (always available)
 - **Popover Features**:
   - Appears centered on the active monitor
   - Always on top
@@ -25,9 +27,9 @@ This enhanced version of the LSL Logger App includes system tray functionality a
   - Clean, minimal interface
 
 ### 3. Enhanced Window Management
-- **Smart Minimizing**: Closing the window (X button) minimizes to tray instead of closing
+- **Minimize to Tray**: Use the **Minimize to Tray** button to run in the background; the window **X** button quits the app
 - **Toggle Button**: The minimize button toggles between "Minimize to Tray" and "Restore from Tray"
-- **Background Operation**: App continues recording and logging while minimized
+- **Background Operation**: App continues recording and logging while minimized to tray
 
 ## Installation
 
@@ -54,7 +56,7 @@ This enhanced version of the LSL Logger App includes system tray functionality a
 3. Minimize to tray when you want the app to run in the background
 
 ### Quick Logging
-1. Press `Ctrl+Alt+L` from anywhere
+1. Use **Quick Log** from the system tray menu (or enable the global hotkey; see above)
 2. Type your log message
 3. Press `Enter` to log and close, or `Escape` to cancel
 
@@ -77,35 +79,27 @@ This enhanced version of the LSL Logger App includes system tray functionality a
 
 ## Icons
 
-The application includes theme-aware icons located in the `icons/` folder:
+Theme-aware icons are loaded from the `icons/` folder when present:
 
-- **Dark theme icons** (default):
-  - `LogToLabStreamingLayerIcon.png` - Main application icon
-  - `LogToLabStreamingLayerIcon.ico` - Windows icon
-  - `LogToLabStreamingLayerIcon.icns` - macOS icon
-  - `LogToLabStreamingLayerIcon.svg` - Vector icon
+- **Dark theme** (default): `LogToLabStreamingLayerIcon.png`, `.ico`, `.icns`, or `.svg`
+- **Light theme**: `LogToLabStreamingLayerIcon_Light.png`, `.ico`, or `.icns`
 
-- **Light theme icons**:
-  - `LogToLabStreamingLayerIcon_Light.png` - Light theme application icon
-  - `LogToLabStreamingLayerIcon_Light.ico` - Light theme Windows icon
-  - `LogToLabStreamingLayerIcon_Light.icns` - Light theme macOS icon
+The repository ships with `LogToLabStreamingLayerIcon.svg` only. If PNG/ICO files are missing, the app and tray use a simple drawn **L** fallback icon.
 
-The application automatically detects your system theme and uses the appropriate icon:
-- **Windows**: Reads the registry to detect dark/light mode
-- **Other systems**: Uses a simple heuristic based on system colors
-- **Fallback**: Defaults to dark theme icons if detection fails
+The application detects system theme on Windows (registry) and uses a heuristic elsewhere.
 
 ## Notes
 
-- The global hotkey `Ctrl+Alt+L` works system-wide
-- The app continues recording LSL data while minimized
+- Global hotkey `Ctrl+Alt+L` is **off by default**; enable via `should_register_global_hotkey` on `LoggerApp` if needed
+- Quick Log is always available from the system tray menu
+- The app continues recording LSL data while minimized to tray
 - All existing functionality (XDF recording, LSL streaming) remains intact
-- The app automatically centers the popover on the active monitor
-- System tray icon shows a simple "L" design for easy identification
+- Closing the main window (X) exits the app; use **Minimize to Tray** to keep running in the background
+- System tray icon shows a simple "L" design when PNG assets are not installed
 
 ## Troubleshooting
 
-- **Hotkey not working**: Ensure no other application is using `Ctrl+Alt+L`
+- **Hotkey not working**: Global hotkey is disabled by default; set `LoggerApp.should_register_global_hotkey = True` before tray setup, or use tray **Quick Log**. If enabled, ensure no other app uses `Ctrl+Alt+L`
 - **Tray icon not visible**: Check if your system tray is hidden or collapsed
 - **Permission errors**: Some features may require administrator privileges on Windows
 - **Dependencies**: Ensure all packages are properly installed with `pip install -r requirements.txt`

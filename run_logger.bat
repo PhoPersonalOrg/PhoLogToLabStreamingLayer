@@ -1,4 +1,16 @@
 @echo off
+
 echo Starting LSL Logger App...
-uv run logger_app %*
+
+if exist ".venv\Scripts\python.exe" (
+
+    .venv\Scripts\python.exe logger_app.py %*
+
+) else (
+
+    uv run logger_app %*
+
+)
+
 pause
+
