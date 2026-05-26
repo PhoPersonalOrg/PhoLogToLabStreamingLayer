@@ -153,7 +153,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/16/e1/3079a9ff9b8e11b846c6ac5c8b5bfb7ff225eee721825310c91b3b50304f/tqdm-4.67.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/00/c0/8f5d070730d7836adc9c9b6408dec68c6ced86b304a9b26a14df072a6e8c/traitlets-5.14.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/5d/95/0b0218149b0d6f14df35f5b8f676fa83df4f19ed253c3cc447107ef86eca/transformers-5.6.2-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/39/d1/9484b497e0a0410b901c12b8251c3e746e1e863f7d28419ffe06f7892fda/typer-0.24.2-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/9a/72/193d4e586ec5a4db834a36bbeb47641a62f951f114ffd0fe5b1b46e8d56f/typer-0.25.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/18/67/36e9267722cc04a6b9f15c7f3441c2363321a3ea07da7ae0c0707beb2a9c/typing_extensions-4.15.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/ce/e4/dccd7f47c4b64213ac01ef921a1337ee6e30e8c6466046018326977efd95/tzdata-2026.2-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/39/08/aaaad47bc4e9dc8c725e68f9d04865dbcb2052843ff09c97b08904852d84/urllib3-2.6.3-py3-none-any.whl
@@ -1006,13 +1006,16 @@ packages:
   requires_python: '>=3.10'
 - pypi: ../lab-recorder-python
   name: lab-recorder-python
-  version: 0.3.0
-  sha256: 06371d1f1d9c2e31c7356883358b8782b8e17efb91f97f92fa587f00ead52910
+  version: 0.3.2
+  sha256: 7ef5f918016bcb66c7a2c279e12d4590bef00b07c2f9c3b2386bf274f887334d
   requires_dist:
   - numpy>=2.0.2
   - pyinstaller>=6.16.0
   - pylsl>=1.17.6
   - pyxdf>=1.17.0
+  - pillow>=11.3.0 ; extra == 'service'
+  - pystray>=0.19.5 ; extra == 'service'
+  - pywin32>=311 ; extra == 'service'
   requires_python: '>=3.9.13'
 - pypi: https://files.pythonhosted.org/packages/8a/a1/8d812e53a5da1687abb10445275d41a8b13adb781bbf7196ddbcf8d88505/lazy_loader-0.5-py3-none-any.whl
   name: lazy-loader
@@ -1655,35 +1658,35 @@ packages:
   requires_python: '>=3.6.0'
 - pypi: ./
   name: phologtolabstreaminglayer
-  version: 0.3.7
-  sha256: 7f3587547aec4f00bbb6279ef69c233c4d33bb0c7058fffbc12aba8e0c1373f7
+  version: 0.3.8
+  sha256: bf38d460938f305a9d50707bad18c6e07466ff8b04f0e18904264f0dfac5f5f3
   requires_dist:
   - attrs>=22.2.0,<23
-  - comtypes>=1.4.13 ; sys_platform == 'win32'
-  - cython>=3.1.4
-  - dtw-python
-  - keyboard>=0.13.5
+  - comtypes>=1.4.16,<2 ; sys_platform == 'win32'
+  - cython>=3.2.4,<4
+  - dtw-python>=1.7.4,<2
+  - keyboard>=0.13.5,<0.14
   - lab-recorder-python @ file:///C:/Users/pho/repos/EmotivEpoc/ACTIVE_DEV/lab-recorder-python
-  - matplotlib>=3.9.4
-  - mne>=1.8.0
-  - mne-lsl>=1.6.1
-  - pillow>=11.3.0
-  - psutil>=7.1.1
-  - pyinstaller>=6.14.2
-  - pylsl>=1.17.6
-  - pystray>=0.19.5
-  - pytz>=2025.2
-  - pywin32>=306 ; sys_platform == 'win32'
-  - pyxdf>=1.17.0
-  - setuptools>=80.9.0
-  - sounddevice>=0.5.3
-  - soundfile>=0.13.1
-  - torch>=2.7.1 ; platform_machine != 'x86_64' or sys_platform != 'darwin'
+  - matplotlib>=3.10.9,<4
+  - mne>=1.12.1,<2
+  - mne-lsl>=1.12.0,<2
+  - pillow>=12.2.0,<13
+  - psutil>=7.2.2,<8
+  - pyinstaller>=6.20.0,<7
+  - pylsl>=1.18.2,<2
+  - pystray>=0.19.5,<0.20
+  - pytz>=2026.1.post1,<2027
+  - pywin32>=311,<312 ; sys_platform == 'win32'
+  - pyxdf>=1.17.4,<2
+  - setuptools>=80.10.2,<81
+  - sounddevice>=0.5.5,<0.6
+  - soundfile>=0.13.1,<0.14
+  - torch ; platform_machine == 'x86_64' and sys_platform == 'darwin'
   - torch>=2.0.0,<2.1.0 ; platform_machine == 'x86_64' and sys_platform == 'darwin'
-  - wheel>=0.45.1
+  - wheel>=0.47.0,<0.48
   - whisper-timestamped @ file:///C:/Users/pho/repos/EmotivEpoc/ACTIVE_DEV/whisper-timestamped
   - phopylslhelper @ file:///C:/Users/pho/repos/EmotivEpoc/ACTIVE_DEV/PhoPyLSLhelper
-  - influxdb-client>=1.49.0
+  - influxdb-client>=1.50.0,<2
   requires_python: '>=3.10,<3.11'
 - pypi: ../PhoPyLSLhelper
   name: phopylslhelper
@@ -2339,6 +2342,7 @@ packages:
 - pypi: https://download-r2.pytorch.org/whl/cu130/torch-2.11.0%2Bcu130-cp310-cp310-win_amd64.whl
   name: torch
   version: 2.11.0+cu130
+  sha256: 5b603a44f34816e18df254443a1fbfb4eef7d57128e5c7f6655f7fab45071f6e
   requires_dist:
   - filelock
   - typing-extensions>=4.10.0
@@ -2666,14 +2670,14 @@ packages:
   - sudachidict-core>=20220729 ; extra == 'dev'
   - scikit-learn ; extra == 'dev'
   requires_python: '>=3.10.0'
-- pypi: https://files.pythonhosted.org/packages/39/d1/9484b497e0a0410b901c12b8251c3e746e1e863f7d28419ffe06f7892fda/typer-0.24.2-py3-none-any.whl
+- pypi: https://files.pythonhosted.org/packages/9a/72/193d4e586ec5a4db834a36bbeb47641a62f951f114ffd0fe5b1b46e8d56f/typer-0.25.0-py3-none-any.whl
   name: typer
-  version: 0.24.2
-  sha256: b618bc3d721f9a8d30f3e05565be26416d06e9bcc29d49bc491dc26aba674fa8
+  version: 0.25.0
+  sha256: ac01b48823d3db9a83c9e164338057eadbb1c9957a2a6b4eeb486669c560b5dc
   requires_dist:
   - click>=8.2.1
   - shellingham>=1.3.0
-  - rich>=12.3.0
+  - rich>=13.8.0
   - annotated-doc>=0.0.2
   requires_python: '>=3.10'
 - pypi: https://files.pythonhosted.org/packages/18/67/36e9267722cc04a6b9f15c7f3441c2363321a3ea07da7ae0c0707beb2a9c/typing_extensions-4.15.0-py3-none-any.whl

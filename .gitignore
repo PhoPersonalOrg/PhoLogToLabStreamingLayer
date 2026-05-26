@@ -12,3 +12,6 @@ templating/uv_deps_switcher/backups/pyproject.toml.bak
 # pixi environments
 .pixi/*
 !.pixi/config.toml
+data/_test_xdf_output
+.cursorindexingignore.bak
+.cursorindexingignore
