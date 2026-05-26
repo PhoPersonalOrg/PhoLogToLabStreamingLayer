@@ -20,18 +20,31 @@ import sys
 from phopylslhelper.general_helpers import unwrap_single_element_listlike_if_needed, readable_dt_str, from_readable_dt_str, localize_datetime_to_timezone, tz_UTC, tz_Eastern, _default_tz
 from phopylslhelper.easy_time_sync import EasyTimeSyncParsingMixin
 from phopylslhelper.mixins.app_helpers import SingletonInstanceMixin, AppThemeMixin, SystemTrayAppMixin
+from phologtolabstreaminglayer.startup_timing import mark
+
+mark("logger_app.py import begin")
 from whisper_timestamped.mixins.live_whisper_transcription import LiveWhisperTranscriptionAppMixin
+mark("live whisper mixin import complete")
 from labrecorder import LabRecorder
 from phologtolabstreaminglayer.features.global_hotkey import GlobalHotkeyMixin
 from phologtolabstreaminglayer.features.recording_indicator_icon import RecordingIndicatorIconMixin
 from phologtolabstreaminglayer.features.console_output_tk import ConsoleOutputFrame
 
+mark("logger_app.py imports complete")
+
 # program_lock_port = int(os.environ.get("LIVE_WHISPER_LOCK_PORT", 13372))
 # program_lock_port = int(os.environ.get("PHO_LOGTOLABSTREAMINGLAYER_LOCK_PORT", 13379))  # No longer needed - using file-based locking
 
-
-_default_xdf_folder = Path(r'E:\Dropbox (Personal)\Databases\UnparsedData\PhoLogToLabStreamingLayer_logs').resolve()
+_DEFAULT_XDF_FOLDER_RAW = Path(r'E:\Dropbox (Personal)\Databases\UnparsedData\PhoLogToLabStreamingLayer_logs')
 # _default_xdf_folder = Path('/media/halechr/MAX/cloud/University of Michigan Dropbox/Pho Hale/Personal/LabRecordedTextLog').resolve() ## Lab computer
+_resolved_default_xdf_folder: Optional[Path] = None
+
+
+def get_default_xdf_folder() -> Path:
+    global _resolved_default_xdf_folder
+    if _resolved_default_xdf_folder is None:
+        _resolved_default_xdf_folder = _DEFAULT_XDF_FOLDER_RAW.resolve()
+    return _resolved_default_xdf_folder
 
 
 class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, SystemTrayAppMixin, SingletonInstanceMixin, LiveWhisperTranscriptionAppMixin, EasyTimeSyncParsingMixin):
@@ -56,7 +69,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
 
         # Set application icon
         self.setup_app_icon()
-        self.xdf_folder = (xdf_folder or _default_xdf_folder)
+        self.xdf_folder = (xdf_folder or get_default_xdf_folder())
 
         # Recording state
         self.recording = False
@@ -101,6 +114,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         
         # Lab-recorder integration
         self.lab_recorder: Optional[LabRecorder] = None
+        self.lab_recorder_service_client = None
         self.discovered_streams: Dict[str, pylsl.StreamInfo] = {}
         self.selected_streams: set = set()
         self._stream_discovery_lock = threading.Lock()  # Lock for thread-safe access to discovered_streams and selected_streams
@@ -116,14 +130,15 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         
         # Create GUI elements first
         self.setup_gui()
+        mark("setup_gui complete")
         
-        # Check for recovery files
-        self.check_for_recovery()
+        # Check for recovery files after the UI is responsive
+        self.root.after(100, self.check_for_recovery)
         
         # Create LSL outlets in background thread to avoid blocking GUI
         threading.Thread(target=self.setup_lsl_outlet, daemon=True).start()
 
-        ## setup transcirption
+        ## setup transcirption (model load runs in a background thread inside the mixin)
         self.root.after(200, self.auto_start_live_transcription)
 
         # Setup system tray and global hotkey
@@ -134,6 +149,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         
         # Start stream discovery after a short delay to allow outlets to be created
         self.root.after(2000, self.start_stream_discovery)
+        mark("LoggerApp.__init__ end")
 
 
     @property
@@ -274,10 +290,11 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
                         self.root.after(0, lambda name=a_stream_name, err=str(e): self.lsl_status_label.config(text=f"LSL Status: Error - {name} - {err}", foreground="red"))
                 except tk.TclError:
                     pass  # GUI is being destroyed
-                raise
 
         ## END for a_stream_name, a_setup_fn in stream_setup_fn_dict...
         print(f'done.')
+        if not were_any_success:
+            print('setup_lsl_outlet(): no LSL outlets were created successfully')
 
         if were_any_success:
             # Setup inlet for recording our own stream (with delay to allow outlet to be discovered)
@@ -771,7 +788,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         list_frame.rowconfigure(0, weight=1)
         
         # Create Treeview for stream display
-        columns = ('Select', 'Name', 'Type', 'Channels', 'Rate', 'Status')
+        columns = ('Select', 'Type', 'Channels', 'Rate', 'Status')
         self.stream_tree = ttk.Treeview(list_frame, columns=columns, show='tree headings', height=6)
         
         # Configure column headings and widths
@@ -782,8 +799,6 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
             self.stream_tree.heading(col, text=col)
             if col == 'Select':
                 self.stream_tree.column(col, width=60, minwidth=60)
-            elif col == 'Name':
-                self.stream_tree.column(col, width=120, minwidth=100)
             elif col == 'Type':
                 self.stream_tree.column(col, width=80, minwidth=60)
             elif col == 'Channels':
@@ -1130,7 +1145,8 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
     def user_select_xdf_folder_if_needed(self) -> Path:
         """Ensures the self.xdf_folder is valid, otherwise forces the user to select a valid one. returns the valid folder.
         """
-        print(f'user_select_xdf_folder_if_needed(): self.xdf_folder: "{self.xdf_folder}", type: {type(self.xdf_folder)}\n\tself.xdf_folder.exists(): {self.xdf_folder.exists()}\n\t_default_xdf_folder.is_dir(): {_default_xdf_folder.is_dir()}')
+        default_xdf_folder = get_default_xdf_folder()
+        print(f'user_select_xdf_folder_if_needed(): self.xdf_folder: "{self.xdf_folder}", type: {type(self.xdf_folder)}\n\tself.xdf_folder.exists(): {self.xdf_folder.exists()}\n\tdefault_xdf_folder.is_dir(): {default_xdf_folder.is_dir()}')
         if (self.xdf_folder is not None) and isinstance(self.xdf_folder, str):
             self.xdf_folder = Path(self.xdf_folder).resolve()
         print(f'(self.xdf_folder is not None) and (self.xdf_folder.exists()) and (self.xdf_folder.is_dir()): {(self.xdf_folder is not None) and (self.xdf_folder.exists()) and (self.xdf_folder.is_dir())}')
@@ -1139,11 +1155,11 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
             return self.xdf_folder
         else:
             ## try to get the default first
-            if (_default_xdf_folder is not None) and (_default_xdf_folder.exists()) and (_default_xdf_folder.is_dir()):
-                self.xdf_folder = _default_xdf_folder
+            if (default_xdf_folder is not None) and (default_xdf_folder.exists()) and (default_xdf_folder.is_dir()):
+                self.xdf_folder = default_xdf_folder
             else:
                 ## prompt user with GUI:
-                print(f'_default_xdf_folder: "{_default_xdf_folder.as_posix()}"')
+                print(f'default_xdf_folder: "{default_xdf_folder.as_posix()}"')
                 self.xdf_folder = Path(filedialog.askdirectory(initialdir=str(self.xdf_folder), title="Select output XDF Folder - PhoLogToLabStreamingLayer_logs")).resolve()
 
             assert self.xdf_folder.exists(), f"XDF folder does not exist: {self.xdf_folder}"
@@ -1211,7 +1227,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
     def start_recording(self):
         """Start XDF recording using LabRecorder or fallback to legacy method"""
         # Check if we have streams to record
-        if self.is_lab_recorder_available():
+        if self.is_lab_recorder_available() and not self.is_lab_recorder_service_available():
             selected_streams = self.get_selected_streams()
             if not selected_streams:
                 messagebox.showerror("Error", "No LSL streams selected for recording")
@@ -1321,7 +1337,9 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
             print("LabRecorder not available, falling back to legacy recording")
             self.legacy_recording_worker()
             return
-        
+        if self.is_lab_recorder_service_available():
+            self.service_rcs_recording_worker()
+            return
         try:
             # Configure LabRecorder with selected streams
             selected_stream_infos = self.get_selected_streams()
@@ -1402,6 +1420,24 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
                 ))
             # Fall back to legacy recording
             self.legacy_recording_worker()
+
+
+    def service_rcs_recording_worker(self):
+        """Record via external LabRecorderService (C++ engine) using RCS."""
+        try:
+            self._service_rcs_start_recording()
+            print(f"LabRecorderService recording started: {self.xdf_filename}")
+            while self.recording and not self._shutting_down:
+                time.sleep(0.2)
+        except Exception as e:
+            print(f"LabRecorderService recording error: {e}")
+            if not self._shutting_down:
+                self.root.after(0, lambda: self.update_log_display(f"LabRecorderService error: {str(e)[:100]}", datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        finally:
+            try:
+                self._service_rcs_stop_recording()
+            except Exception as e:
+                print(f"Error stopping LabRecorderService recording: {e}")
     
     def legacy_recording_worker(self):
         """Legacy background thread for recording LSL data with incremental backup"""
@@ -1458,8 +1494,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
             self.recording_thread.join(timeout=2.0)
         
         # Handle file saving based on recording method
-        if self.is_lab_recorder_available():
-            # LabRecorder handles XDF file creation automatically
+        if self.is_lab_recorder_service_available() or self.is_lab_recorder_available():
             print(f"LabRecorder XDF file saved: {self.xdf_filename}")
         else:
             # Legacy method - save XDF file using MNE
@@ -1506,7 +1541,12 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
 
     def start_new_split_recording(self):
         """Start new recording after split"""
-        if not self.has_any_inlets:
+        if self.is_lab_recorder_available() and not self.is_lab_recorder_service_available():
+            selected_streams = self.get_selected_streams()
+            if not selected_streams:
+                print("Cannot split recording: no LSL streams selected")
+                return
+        elif not self.is_lab_recorder_available() and not self.has_any_inlets:
             print("Cannot split recording: no inlet available")
             return
         
@@ -1822,21 +1862,65 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
     # ---------------------------------------------------------------------------- #
     
     def init_lab_recorder(self):
-        """Initialize lab-recorder for XDF recording"""
+        """Initialize lab-recorder for XDF recording (Windows service RCS or in-process fallback)."""
         try:
+            self.lab_recorder_service_client = None
+            try:
+                from labrecorder.service.client import get_service_rcs_client, is_service_available
+                if is_service_available():
+                    self.lab_recorder_service_client = get_service_rcs_client()
+                    print("Using LabRecorderService via RCS")
+                    return True
+            except ImportError:
+                pass
             if self.lab_recorder is None:
-                # Create LabRecorder instance but don't start recording yet
-                self.lab_recorder = LabRecorder()
+                self.lab_recorder = LabRecorder(enable_remote_control=False)
                 print("LabRecorder initialized successfully")
             return True
         except Exception as e:
             print(f"Error initializing LabRecorder: {e}")
             return False
+
+
+    def is_lab_recorder_service_available(self) -> bool:
+        return self.lab_recorder_service_client is not None
+
+
+    def _build_rcs_filename_command(self, xdf_path: str) -> str:
+        p = Path(xdf_path)
+        root = p.parent.as_posix()
+        template = p.name
+        return f"filename {{root:{root}}}{{template:{template}}}"
+
+
+    def _service_rcs_start_recording(self) -> None:
+        client = self.lab_recorder_service_client
+        if client is None:
+            raise RuntimeError("LabRecorderService RCS client not available")
+        client.send_command("update")
+        time.sleep(2.0)
+        client.send_command("select all")
+        client.send_command(self._build_rcs_filename_command(self.xdf_filename))
+        client.send_command("start")
+        path = client.get_recording_path()
+        if path is not None:
+            self.xdf_filename = str(path)
+
+
+    def _service_rcs_stop_recording(self) -> None:
+        client = self.lab_recorder_service_client
+        if client is not None:
+            client.request_stop()
     
 
     def cleanup_lab_recorder(self):
         """Clean up lab-recorder resources"""
         try:
+            if self.is_lab_recorder_service_available() and self.recording:
+                self._service_rcs_stop_recording()
+            if self.lab_recorder_service_client is not None:
+                self.lab_recorder_service_client = None
+                print("LabRecorderService cleaned up successfully")
             if self.lab_recorder is not None:
                 # Stop any active recording
                 if hasattr(self.lab_recorder, 'is_recording') and self.lab_recorder.is_recording:
@@ -1848,8 +1932,8 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
     
 
     def is_lab_recorder_available(self) -> bool:
-        """Check if lab-recorder is available and initialized"""
-        return self.lab_recorder is not None
+        """Check if lab-recorder (service RCS or in-process) is available."""
+        return self.is_lab_recorder_service_available() or self.lab_recorder is not None
     
 
     def start_stream_discovery(self):
