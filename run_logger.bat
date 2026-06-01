@@ -1,4 +1,4 @@
 @echo off
 echo Starting LSL Logger App...
-uv run logger_app %*
+uv run python logger_app.py %*
 pause
