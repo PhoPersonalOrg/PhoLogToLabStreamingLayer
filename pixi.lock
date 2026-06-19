@@ -1659,7 +1659,7 @@ packages:
 - pypi: ./
   name: phologtolabstreaminglayer
   version: 0.3.8
-  sha256: bf38d460938f305a9d50707bad18c6e07466ff8b04f0e18904264f0dfac5f5f3
+  sha256: af27b6921282922f9d0df72e96745179a749e3b9a0b346c201aa7fa23a91bb2b
   requires_dist:
   - attrs>=22.2.0,<23
   - comtypes>=1.4.16,<2 ; sys_platform == 'win32'
@@ -2780,8 +2780,8 @@ packages:
   requires_python: '>=3.9'
 - pypi: ../whisper-timestamped
   name: whisper-timestamped
-  version: 0.2.5
-  sha256: 760d7029ae4985be615dd30e67184c32646fcdad191916fd427f682587049a8a
+  version: 0.2.6
+  sha256: a159d342dc11d482973688f3250d26ae206fda783a7223aeec3da217b624c274
   requires_dist:
   - attrs>=22.2.0,<23
   - auditok>=0.3.0

@@ -1269,7 +1269,7 @@ dev = [
 
 [[package]]
 name = "phopylslhelper"
-version = "1.0.5"
+version = "1.0.6"
 source = { editable = "../PhoPyLSLhelper" }
 dependencies = [
     { name = "attrs", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
@@ -2222,7 +2222,7 @@ wheels = [
 
 [[package]]
 name = "whisper-timestamped"
-version = "0.2.5"
+version = "0.2.6"
 source = { editable = "../whisper-timestamped" }
 dependencies = [
     { name = "attrs", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
