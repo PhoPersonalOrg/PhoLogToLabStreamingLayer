@@ -1,0 +1,19 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../whisper-timestamped"
+		},
+		{
+			"path": "../PhoPyLSLhelper"
+		},
+		{
+			"path": "../pyxdf"
+		}
+	],
+	"settings": {
+		"python.languageServer": "None"
+	}
+}
