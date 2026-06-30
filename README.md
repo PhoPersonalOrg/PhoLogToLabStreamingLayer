@@ -345,10 +345,16 @@ source .venv/bin/activate
 uv tool install --editable .
 
 
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# curl -LsSf https://astral.sh/uv/install.sh | sh
 uv tool install git+https://github.com/PhoPersonalOrg/uv-deps-switcher.git
+uv-deps-switcher --generate-templates
 uv-deps-switcher external --checkout-dest "./EXTERNAL" --yes
+uv lock
 uv sync --all-extras
+
+
 source .venv/bin/activate
+
+
 
 ```
