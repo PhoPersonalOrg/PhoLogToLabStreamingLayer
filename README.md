@@ -334,3 +334,21 @@ pyenv install 3.9.13
   )
   
 ```
+
+
+## Building for Agents/AI
+```bash
+
+uv lock
+uv sync --all-extras
+source .venv/bin/activate
+uv tool install --editable .
+
+
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv tool install git+https://github.com/PhoPersonalOrg/uv-deps-switcher.git
+uv-deps-switcher external --checkout-dest "./EXTERNAL" --yes
+uv sync --all-extras
+source .venv/bin/activate
+
+```

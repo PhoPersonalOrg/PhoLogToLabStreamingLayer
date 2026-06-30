@@ -1,0 +1,4 @@
+[tool.uv.sources]
+lab-recorder-python = { path = "{ACTIVE_DEV_PATH_PREFIX}/lab-recorder-python", editable = true }
+whisper-timestamped = { path = "{ACTIVE_DEV_PATH_PREFIX}/whisper-timestamped", editable = true }
+phopylslhelper = { path = "{ACTIVE_DEV_PATH_PREFIX}/PhoPyLSLhelper", editable = true }

@@ -1,0 +1,4 @@
+[tool.uv.sources]
+lab-recorder-python = { workspace = true }
+whisper-timestamped = { workspace = true }
+phopylslhelper = { workspace = true }

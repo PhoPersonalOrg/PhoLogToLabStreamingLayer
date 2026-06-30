@@ -15,3 +15,6 @@ templating/uv_deps_switcher/backups/pyproject.toml.bak
 data/_test_xdf_output
 .cursorindexingignore.bak
 .cursorindexingignore
+
+# uv-deps-switcher
+**/templating/uv_deps_switcher/backups
