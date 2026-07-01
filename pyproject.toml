@@ -59,9 +59,9 @@ dev-dependencies = [
 logger_app = "phologtolabstreaminglayer.console:console_main"
 
 [tool.uv.sources]
-lab-recorder-python = { git = "https://github.com/CommanderPho/lab-recorder-python.git", rev='feature/conformance-to-xdf-spec' }
-whisper-timestamped = { git = "https://github.com/CommanderPho/whisper-timestamped.git", rev='develop' }
-phopylslhelper = { git = "https://github.com/CommanderPho/phopylslhelper.git", rev='develop' }
+lab-recorder-python = { path = "../lab-recorder-python", editable = true }
+whisper-timestamped = { path = "../whisper-timestamped", editable = true }
+phopylslhelper = { path = "../PhoPyLSLhelper", editable = true }
 
 phopyqthelper = { path = "../phopyqthelper", editable = true }
 

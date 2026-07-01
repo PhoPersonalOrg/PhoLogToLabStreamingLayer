@@ -2,6 +2,3 @@
 lab-recorder-python = { git = "https://github.com/CommanderPho/lab-recorder-python.git", rev='feature/conformance-to-xdf-spec' }
 whisper-timestamped = { git = "https://github.com/CommanderPho/whisper-timestamped.git", rev='develop' }
 phopylslhelper = { git = "https://github.com/CommanderPho/phopylslhelper.git", rev='develop' }
-# lab-recorder-python = { git = "https://github.com/CommanderPho/lab-recorder-python.git", rev='origin/feature/conformance-to-xdf-spec' }
-# whisper-timestamped = { git = "https://github.com/CommanderPho/whisper-timestamped.git", rev='origin/develop' }
-# phopylslhelper = { git = "https://github.com/CommanderPho/phopylslhelper.git", rev='origin/develop' }
