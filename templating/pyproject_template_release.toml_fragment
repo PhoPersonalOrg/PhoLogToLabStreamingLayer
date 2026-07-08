@@ -1,4 +1,4 @@
 [tool.uv.sources]
-lab-recorder-python = { git = "https://github.com/CommanderPho/lab-recorder-python.git", rev='feature/conformance-to-xdf-spec' }
+lab-recorder-python = { git = "https://github.com/CommanderPho/lab-recorder-python.git", rev='develop' }
 whisper-timestamped = { git = "https://github.com/CommanderPho/whisper-timestamped.git", rev='develop' }
-phopylslhelper = { git = "https://github.com/CommanderPho/phopylslhelper.git", rev='develop' }
+phopylslhelper = { git = "https://github.com/PhoPersonalOrg/phopylslhelper.git", rev='develop' }
