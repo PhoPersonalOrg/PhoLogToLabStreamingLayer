@@ -621,8 +621,6 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
     
     def quit_app(self):
         """Quit the application completely"""
-        if self.system_tray:
-            self.system_tray.stop()
         self.on_closing()
 
 
@@ -2240,7 +2238,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         
         # Clean up system tray
         if self.system_tray:
-            self.system_tray.stop()
+            threading.Thread(target=self.system_tray.stop, daemon=True).start()
         
         # Clean up lab-recorder
         self.cleanup_lab_recorder()
