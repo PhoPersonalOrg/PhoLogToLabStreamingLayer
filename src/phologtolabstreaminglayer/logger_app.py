@@ -29,6 +29,7 @@ from labrecorder import LabRecorder
 from phologtolabstreaminglayer.features.global_hotkey import GlobalHotkeyMixin
 from phologtolabstreaminglayer.features.recording_indicator_icon import RecordingIndicatorIconMixin
 from phologtolabstreaminglayer.features.console_output_tk import ConsoleOutputFrame
+from phologtolabstreaminglayer.features.live_log_csv import LiveLogCsvWriter, default_live_log_csv_dir
 
 mark("logger_app.py imports complete")
 
@@ -38,6 +39,7 @@ mark("logger_app.py imports complete")
 _DEFAULT_XDF_FOLDER_RAW = Path(r'E:\Dropbox (Personal)\Databases\UnparsedData\PhoLogToLabStreamingLayer_logs')
 # _default_xdf_folder = Path('/media/halechr/MAX/cloud/University of Michigan Dropbox/Pho Hale/Personal/LabRecordedTextLog').resolve() ## Lab computer
 _resolved_default_xdf_folder: Optional[Path] = None
+_LIVE_LOG_CSV_SETTINGS_FILE = Path("live_log_csv_settings.json")
 
 
 def get_default_xdf_folder() -> Path:
@@ -127,6 +129,10 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
 
         # Load EventBoard configuration
         self.load_eventboard_config()
+
+        # Live Log History CSV (mirrors Log History; background writer)
+        self.live_log_csv: Optional[LiveLogCsvWriter] = None
+        self._init_live_log_csv()
         
         # Create GUI elements first
         self.setup_gui()
@@ -727,7 +733,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         self.text_entry.focus()
 
         # ------------------------- Settings Tab -------------------------
-        ttk.Label(settings_tab, text="Settings will appear here.").grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
+        self.setup_live_log_csv_settings_gui(settings_tab)
 
         # Keyboard shortcuts for tab switching (Ctrl+1..5)
         def _select_tab(index: int):
@@ -855,6 +861,115 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
             print(f"Error loading EventBoard config: {e}")
             print("Using default configuration")
             self.eventboard_config = self.get_default_eventboard_config()
+
+    def _default_live_log_csv_settings(self) -> Dict[str, Any]:
+        return {
+            "enabled": True,
+            "output_dir": str(default_live_log_csv_dir(self.xdf_folder)),
+        }
+
+    def load_live_log_csv_settings(self) -> Dict[str, Any]:
+        """Load live log CSV preferences; missing file uses defaults."""
+        defaults = self._default_live_log_csv_settings()
+        if not _LIVE_LOG_CSV_SETTINGS_FILE.exists():
+            return defaults
+        try:
+            with open(_LIVE_LOG_CSV_SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            enabled = bool(data.get("enabled", defaults["enabled"]))
+            output_dir = data.get("output_dir") or defaults["output_dir"]
+            return {"enabled": enabled, "output_dir": str(output_dir)}
+        except Exception as e:
+            print(f"Error loading live log CSV settings: {e}")
+            return defaults
+
+    def save_live_log_csv_settings(self) -> None:
+        """Persist enable flag and output directory."""
+        if self.live_log_csv is None:
+            return
+        payload = {
+            "enabled": self.live_log_csv.enabled,
+            "output_dir": str(self.live_log_csv.output_dir or default_live_log_csv_dir(self.xdf_folder)),
+        }
+        try:
+            with open(_LIVE_LOG_CSV_SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+        except Exception as e:
+            print(f"Error saving live log CSV settings: {e}")
+
+    def _init_live_log_csv(self) -> None:
+        """Construct and start the live Log History CSV writer from saved settings."""
+        settings = self.load_live_log_csv_settings()
+        output_dir = Path(settings["output_dir"])
+        self.live_log_csv = LiveLogCsvWriter(enabled=settings["enabled"], output_dir=output_dir)
+        self.live_log_csv.start(output_dir)
+        if settings["enabled"]:
+            print(f"Live log CSV enabled -> {self.live_log_csv.expected_session_path}")
+        else:
+            print("Live log CSV disabled at startup")
+
+    def setup_live_log_csv_settings_gui(self, parent) -> None:
+        """Settings tab group for live Log History CSV."""
+        frame = ttk.LabelFrame(parent, text="Live Log CSV", padding="5")
+        frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        frame.columnconfigure(1, weight=1)
+
+        enabled = True if self.live_log_csv is None else self.live_log_csv.enabled
+        output_dir = (
+            default_live_log_csv_dir(self.xdf_folder)
+            if self.live_log_csv is None or self.live_log_csv.output_dir is None
+            else self.live_log_csv.output_dir
+        )
+
+        self.live_log_csv_enabled_var = tk.BooleanVar(value=enabled)
+        enable_cb = ttk.Checkbutton(
+            frame,
+            text="Enable live log CSV",
+            variable=self.live_log_csv_enabled_var,
+            command=self._on_live_log_csv_enable_toggled,
+        )
+        enable_cb.grid(row=0, column=0, columnspan=3, sticky=tk.W, pady=(0, 8))
+
+        ttk.Label(frame, text="Output directory:").grid(row=1, column=0, sticky=tk.W, padx=(0, 8))
+        self.live_log_csv_dir_var = tk.StringVar(value=str(output_dir))
+        dir_entry = ttk.Entry(frame, textvariable=self.live_log_csv_dir_var)
+        dir_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(0, 5))
+        browse_btn = ttk.Button(frame, text="Browse…", command=self._on_live_log_csv_browse)
+        browse_btn.grid(row=1, column=2, sticky=tk.E)
+
+        session_path = ""
+        if self.live_log_csv is not None and self.live_log_csv.expected_session_path is not None:
+            session_path = str(self.live_log_csv.expected_session_path)
+        self.live_log_csv_file_label = ttk.Label(frame, text=f"Session file: {session_path or '(none)'}")
+        self.live_log_csv_file_label.grid(row=2, column=0, columnspan=3, sticky=tk.W, pady=(8, 0))
+
+    def _refresh_live_log_csv_file_label(self) -> None:
+        if not hasattr(self, "live_log_csv_file_label"):
+            return
+        path = None
+        if self.live_log_csv is not None:
+            path = self.live_log_csv.session_path or self.live_log_csv.expected_session_path
+        self.live_log_csv_file_label.config(text=f"Session file: {path if path else '(none)'}")
+
+    def _on_live_log_csv_enable_toggled(self) -> None:
+        if self.live_log_csv is None:
+            return
+        enabled = bool(self.live_log_csv_enabled_var.get())
+        self.live_log_csv.set_enabled(enabled)
+        self.save_live_log_csv_settings()
+        # Allow writer thread a moment to open/close, then refresh path label
+        self.root.after(150, self._refresh_live_log_csv_file_label)
+
+    def _on_live_log_csv_browse(self) -> None:
+        initial = self.live_log_csv_dir_var.get().strip() or str(default_live_log_csv_dir(self.xdf_folder))
+        chosen = filedialog.askdirectory(initialdir=initial, title="Select Live Log CSV directory")
+        if not chosen:
+            return
+        self.live_log_csv_dir_var.set(chosen)
+        if self.live_log_csv is not None:
+            self.live_log_csv.reconfigure(Path(chosen))
+            self.save_live_log_csv_settings()
+            self.root.after(150, self._refresh_live_log_csv_file_label)
 
     def get_default_eventboard_config(self):
         """Get default EventBoard configuration"""
@@ -1850,6 +1965,9 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         except tk.TclError:
             # GUI is being destroyed, ignore the error
             pass
+
+        if self.live_log_csv is not None:
+            self.live_log_csv.append(timestamp, message)
     
     def clear_log_display(self):
         """Clear the log display area"""
@@ -2208,6 +2326,11 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         """Handle window closing"""
         # Set shutdown flag to prevent GUI updates
         self._shutting_down = True
+
+        # Stop live log CSV writer
+        if self.live_log_csv is not None:
+            self.live_log_csv.stop()
+            self.live_log_csv = None
         
         # Stop transcription if active
         if self.transcription_active:
