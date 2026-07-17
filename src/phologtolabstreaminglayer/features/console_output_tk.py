@@ -269,13 +269,22 @@ class ConsoleOutputFrame(ttk.Frame):
         except queue.Full:
             pass  # Drop if queue is full
         
-        # Schedule UI update if not already scheduled
+        # Schedule UI update if not already scheduled.
+        # Never call root.after() while holding _update_lock: on Windows, after()
+        # from a worker can block on the Tcl lock held by MainThread (e.g. during
+        # WM_DELETE_WINDOW / on_closing). If MainThread then prints into this
+        # callback and waits for _update_lock, the process deadlocks (Not Responding).
+        should_schedule = False
         with self._update_lock:
             if not self._update_scheduled:
                 self._update_scheduled = True
-                try:
-                    self._root.after(10, self._process_text_queue)
-                except Exception:
+                should_schedule = True
+
+        if should_schedule:
+            try:
+                self._root.after(10, self._process_text_queue)
+            except Exception:
+                with self._update_lock:
                     self._update_scheduled = False
 
 

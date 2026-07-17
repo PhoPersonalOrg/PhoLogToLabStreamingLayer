@@ -1,138 +1,143 @@
-import pytest
-import pyxdf
 import os
 import tempfile
-import sys
-import threading
 import time
-from unittest.mock import MagicMock, patch
+import unittest
 
 import pylsl
+import pyxdf
 from labrecorder import LabRecorder
 
-@pytest.fixture
-def temp_xdf_dir():
-    with tempfile.TemporaryDirectory() as temp_dir:
-        yield temp_dir
 
-def test_xdf_completeness_spec(temp_xdf_dir):
-    """
-    Test suite for testing XDF recording completeness against the official OpenSpec requirements.
-    This simulates recording and checks the generated file structure.
-    """
-    # Create LSL streams based on the spec
+class TestXdfCompleteness(unittest.TestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.temp_xdf_dir = self._tmpdir.name
 
-    # 1. TextLogger stream
-    info_text = pylsl.StreamInfo('TextLogger', 'Markers', 1, 0, 'string', 'textlogger_001')
-    outlet_text = pylsl.StreamOutlet(info_text)
+    def tearDown(self):
+        self._tmpdir.cleanup()
 
-    # 2. EventBoard stream
-    info_event = pylsl.StreamInfo('EventBoard', 'Markers', 1, 0, 'string', 'eventboard_001')
-    outlet_event = pylsl.StreamOutlet(info_event)
+    def test_xdf_completeness_spec(self):
+        """
+        Test suite for testing XDF recording completeness against the official OpenSpec requirements.
+        This simulates recording and checks the generated file structure.
+        """
+        # Create LSL streams based on the spec
 
-    # Wait a bit for streams to be resolvable
-    time.sleep(1.0)
+        # 1. TextLogger stream
+        info_text = pylsl.StreamInfo('TextLogger', 'Markers', 1, 0, 'string', 'textlogger_001')
+        outlet_text = pylsl.StreamOutlet(info_text)
 
-    # Use labrecorder to record
-    recorder = LabRecorder()
-    xdf_filename = os.path.join(temp_xdf_dir, "test_recording.xdf")
+        # 2. EventBoard stream
+        info_event = pylsl.StreamInfo('EventBoard', 'Markers', 1, 0, 'string', 'eventboard_001')
+        outlet_event = pylsl.StreamOutlet(info_event)
 
-    # Select our streams
-    streams = recorder.find_streams()
-    text_stream = next((s for s in streams if s.name() == 'TextLogger'), None)
-    event_stream = next((s for s in streams if s.name() == 'EventBoard'), None)
+        # Wait a bit for streams to be resolvable
+        time.sleep(1.0)
 
-    assert text_stream is not None, "TextLogger stream not found"
-    assert event_stream is not None, "EventBoard stream not found"
+        # Use labrecorder to record
+        recorder = LabRecorder()
+        xdf_filename = os.path.join(self.temp_xdf_dir, "test_recording.xdf")
 
-    # Start recording
-    recorder.start_recording(xdf_filename, [text_stream, event_stream])
+        # Select our streams
+        streams = recorder.find_streams()
+        text_stream = next((s for s in streams if s.name() == 'TextLogger'), None)
+        event_stream = next((s for s in streams if s.name() == 'EventBoard'), None)
 
-    # Wait for recorder to start - IMPORTANT: allow labrecorder to open the file properly
-    time.sleep(2.0)
+        self.assertIsNotNone(text_stream, "TextLogger stream not found")
+        self.assertIsNotNone(event_stream, "EventBoard stream not found")
 
-    # Push samples corresponding to scenarios
+        # Start recording
+        recorder.start_recording(xdf_filename, [text_stream, event_stream])
 
-    # TextLogger: Python sends text over LSL
-    outlet_text.push_sample(['Hello from Python'])
-    time.sleep(0.5)
+        # Wait for recorder to start - IMPORTANT: allow labrecorder to open the file properly
+        time.sleep(2.0)
 
-    # EventBoard: Python emits instantaneous event
-    outlet_event.push_sample(['TASK_START|Start Task|2024-01-15T10:30:45.123456'])
-    time.sleep(0.5)
+        # Push samples corresponding to scenarios
 
-    # EventBoard: Python emits toggle start/end events
-    outlet_event.push_sample(['FOCUS_MODE_START|Focus Mode|2024-01-15T10:30:45.123456|TOGGLE:True'])
-    time.sleep(1.0)
-    outlet_event.push_sample(['FOCUS_MODE_END|Focus Mode|2024-01-15T10:35:20.789012|TOGGLE:False'])
-    time.sleep(1.0)
+        # TextLogger: Python sends text over LSL
+        outlet_text.push_sample(['Hello from Python'])
+        time.sleep(0.5)
 
-    # Stop recording - give it time to flush everything
-    recorder.stop_recording()
-    time.sleep(2.0)
+        # EventBoard: Python emits instantaneous event
+        outlet_event.push_sample(['TASK_START|Start Task|2024-01-15T10:30:45.123456'])
+        time.sleep(0.5)
 
-    # Destroy outlets to ensure streams close
-    del outlet_text
-    del outlet_event
-    time.sleep(0.5)
+        # EventBoard: Python emits toggle start/end events
+        outlet_event.push_sample(['FOCUS_MODE_START|Focus Mode|2024-01-15T10:30:45.123456|TOGGLE:True'])
+        time.sleep(1.0)
+        outlet_event.push_sample(['FOCUS_MODE_END|Focus Mode|2024-01-15T10:35:20.789012|TOGGLE:False'])
+        time.sleep(1.0)
 
-    # Verify file exists
-    assert os.path.exists(xdf_filename), f"XDF file was not created at {xdf_filename}"
+        # Stop recording - give it time to flush everything
+        recorder.stop_recording()
+        time.sleep(2.0)
 
-    # Load and verify XDF structure using pyxdf
-    loaded_streams, fileheader = pyxdf.load_xdf(xdf_filename)
+        # Destroy outlets to ensure streams close
+        del outlet_text
+        del outlet_event
+        time.sleep(0.5)
 
-    # We should have exactly 2 streams
-    assert len(loaded_streams) == 2, f"Expected 2 streams, found {len(loaded_streams)}"
+        # Verify file exists
+        self.assertTrue(os.path.exists(xdf_filename), f"XDF file was not created at {xdf_filename}")
 
-    # Find the streams in the loaded data
-    loaded_text_stream = next((s for s in loaded_streams if s['info']['name'][0] == 'TextLogger'), None)
-    loaded_event_stream = next((s for s in loaded_streams if s['info']['name'][0] == 'EventBoard'), None)
+        # Load and verify XDF structure using pyxdf
+        loaded_streams, fileheader = pyxdf.load_xdf(xdf_filename)
 
-    assert loaded_text_stream is not None, "TextLogger stream missing from XDF"
-    assert loaded_event_stream is not None, "EventBoard stream missing from XDF"
+        # We should have exactly 2 streams
+        self.assertEqual(len(loaded_streams), 2, f"Expected 2 streams, found {len(loaded_streams)}")
 
-    # Verify content of TextLogger stream
-    assert len(loaded_text_stream['time_series']) >= 1
-    assert loaded_text_stream['time_series'][0][0] == 'Hello from Python'
-    assert loaded_text_stream['info']['type'][0] == 'Markers'
+        # Find the streams in the loaded data
+        loaded_text_stream = next((s for s in loaded_streams if s['info']['name'][0] == 'TextLogger'), None)
+        loaded_event_stream = next((s for s in loaded_streams if s['info']['name'][0] == 'EventBoard'), None)
 
-    # Verify content of EventBoard stream
-    assert len(loaded_event_stream['time_series']) >= 3
-    event_messages = [item[0] for item in loaded_event_stream['time_series']]
+        self.assertIsNotNone(loaded_text_stream, "TextLogger stream missing from XDF")
+        self.assertIsNotNone(loaded_event_stream, "EventBoard stream missing from XDF")
 
-    assert 'TASK_START|Start Task|2024-01-15T10:30:45.123456' in event_messages
-    assert 'FOCUS_MODE_START|Focus Mode|2024-01-15T10:30:45.123456|TOGGLE:True' in event_messages
-    assert 'FOCUS_MODE_END|Focus Mode|2024-01-15T10:35:20.789012|TOGGLE:False' in event_messages
+        # Verify content of TextLogger stream
+        self.assertGreaterEqual(len(loaded_text_stream['time_series']), 1)
+        self.assertEqual(loaded_text_stream['time_series'][0][0], 'Hello from Python')
+        self.assertEqual(loaded_text_stream['info']['type'][0], 'Markers')
 
-def test_xdf_reliability_missing_stream(temp_xdf_dir):
-    """
-    Test recording reliability when a stream is missing.
-    """
-    recorder = LabRecorder()
-    xdf_filename = os.path.join(temp_xdf_dir, "test_reliability.xdf")
+        # Verify content of EventBoard stream
+        self.assertGreaterEqual(len(loaded_event_stream['time_series']), 3)
+        event_messages = [item[0] for item in loaded_event_stream['time_series']]
 
-    # Start recording with no streams - should raise an exception
-    with pytest.raises(RuntimeError):
-        recorder.start_recording(xdf_filename, [])
+        self.assertIn('TASK_START|Start Task|2024-01-15T10:30:45.123456', event_messages)
+        self.assertIn('FOCUS_MODE_START|Focus Mode|2024-01-15T10:30:45.123456|TOGGLE:True', event_messages)
+        self.assertIn('FOCUS_MODE_END|Focus Mode|2024-01-15T10:35:20.789012|TOGGLE:False', event_messages)
 
-    # Start recording with one stream, then have it disconnect
-    info_temp = pylsl.StreamInfo('TempStream', 'Markers', 1, 0, 'string', 'temp_001')
-    outlet_temp = pylsl.StreamOutlet(info_temp)
-    time.sleep(1.0)
+    def test_xdf_reliability_missing_stream(self):
+        """
+        Test recording reliability when a stream is missing.
+        """
+        recorder = LabRecorder()
+        xdf_filename = os.path.join(self.temp_xdf_dir, "test_reliability.xdf")
 
-    streams = recorder.find_streams()
-    temp_stream = next((s for s in streams if s.name() == 'TempStream'), None)
+        # Start recording with no streams - should raise an exception
+        with self.assertRaises(RuntimeError):
+            recorder.start_recording(xdf_filename, [])
 
-    recorder.start_recording(xdf_filename, [temp_stream])
-    time.sleep(1.0)
+        # Start recording with one stream, then have it disconnect
+        info_temp = pylsl.StreamInfo('TempStream', 'Markers', 1, 0, 'string', 'temp_001')
+        outlet_temp = pylsl.StreamOutlet(info_temp)
+        time.sleep(1.0)
 
-    # Disconnect stream
-    del outlet_temp
-    time.sleep(1.0)
+        streams = recorder.find_streams()
+        temp_stream = next((s for s in streams if s.name() == 'TempStream'), None)
 
-    # Should stop gracefully
-    recorder.stop_recording()
+        recorder.start_recording(xdf_filename, [temp_stream])
+        time.sleep(1.0)
 
-    # Verify file was still created
-    assert os.path.exists(xdf_filename)
+        # Disconnect stream
+        del outlet_temp
+        time.sleep(1.0)
+
+        # Should stop gracefully
+        recorder.stop_recording()
+
+        # Verify file was still created
+        self.assertTrue(os.path.exists(xdf_filename))
+
+
+if __name__ == "__main__":
+    unittest.main()

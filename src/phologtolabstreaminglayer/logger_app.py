@@ -40,6 +40,7 @@ _DEFAULT_XDF_FOLDER_RAW = Path(r'E:\Dropbox (Personal)\Databases\UnparsedData\Ph
 # _default_xdf_folder = Path('/media/halechr/MAX/cloud/University of Michigan Dropbox/Pho Hale/Personal/LabRecordedTextLog').resolve() ## Lab computer
 _resolved_default_xdf_folder: Optional[Path] = None
 _LIVE_LOG_CSV_SETTINGS_FILE = Path("live_log_csv_settings.json")
+_RECORDING_SETTINGS_FILE = Path("recording_settings.json")
 
 
 def get_default_xdf_folder() -> Path:
@@ -133,6 +134,10 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         # Live Log History CSV (mirrors Log History; background writer)
         self.live_log_csv: Optional[LiveLogCsvWriter] = None
         self._init_live_log_csv()
+
+        # XDF recording preferences (auto-start on launch)
+        self.auto_start_xdf_on_startup = True
+        self._init_recording_settings()
         
         # Create GUI elements first
         self.setup_gui()
@@ -734,6 +739,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
 
         # ------------------------- Settings Tab -------------------------
         self.setup_live_log_csv_settings_gui(settings_tab)
+        self.setup_recording_settings_gui(settings_tab)
 
         # Keyboard shortcuts for tab switching (Ctrl+1..5)
         def _select_tab(index: int):
@@ -970,6 +976,61 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
             self.live_log_csv.reconfigure(Path(chosen))
             self.save_live_log_csv_settings()
             self.root.after(150, self._refresh_live_log_csv_file_label)
+
+    def _default_recording_settings(self) -> Dict[str, Any]:
+        return {"auto_start_on_startup": True}
+
+    def load_recording_settings(self) -> Dict[str, Any]:
+        """Load XDF recording preferences; missing file uses defaults."""
+        defaults = self._default_recording_settings()
+        if not _RECORDING_SETTINGS_FILE.exists():
+            return defaults
+        try:
+            with open(_RECORDING_SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return {
+                "auto_start_on_startup": bool(data.get("auto_start_on_startup", defaults["auto_start_on_startup"])),
+            }
+        except Exception as e:
+            print(f"Error loading recording settings: {e}")
+            return defaults
+
+    def save_recording_settings(self) -> None:
+        """Persist XDF recording preferences."""
+        payload = {"auto_start_on_startup": bool(self.auto_start_xdf_on_startup)}
+        try:
+            with open(_RECORDING_SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+        except Exception as e:
+            print(f"Error saving recording settings: {e}")
+
+    def _init_recording_settings(self) -> None:
+        """Load recording settings into instance flags."""
+        settings = self.load_recording_settings()
+        self.auto_start_xdf_on_startup = bool(settings["auto_start_on_startup"])
+        if self.auto_start_xdf_on_startup:
+            print("XDF auto-start on startup: enabled")
+        else:
+            print("XDF auto-start on startup: disabled")
+
+    def setup_recording_settings_gui(self, parent) -> None:
+        """Settings tab group for XDF recording preferences."""
+        frame = ttk.LabelFrame(parent, text="XDF Recording", padding="5")
+        frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        frame.columnconfigure(0, weight=1)
+
+        self.auto_start_xdf_var = tk.BooleanVar(value=self.auto_start_xdf_on_startup)
+        enable_cb = ttk.Checkbutton(
+            frame,
+            text="Auto-start XDF recording on startup",
+            variable=self.auto_start_xdf_var,
+            command=self._on_auto_start_xdf_toggled,
+        )
+        enable_cb.grid(row=0, column=0, sticky=tk.W)
+
+    def _on_auto_start_xdf_toggled(self) -> None:
+        self.auto_start_xdf_on_startup = bool(self.auto_start_xdf_var.get())
+        self.save_recording_settings()
 
     def get_default_eventboard_config(self):
         """Get default EventBoard configuration"""
@@ -1380,6 +1441,10 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
             return  # Already tried
         
         self.auto_start_attempted = True
+
+        if not self.auto_start_xdf_on_startup:
+            print("Skipping XDF auto-start: disabled in Settings")
+            return
         
         # Auto-select own streams for recording
         if self.is_lab_recorder_available():
@@ -2327,6 +2392,14 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         # Set shutdown flag to prevent GUI updates
         self._shutting_down = True
 
+        # Detach stdout/stderr from the Tk console BEFORE any stop_* work.
+        # stop_live_transcription / labrecorder / stream watch all print; if those
+        # writes still go through ConsoleOutputFrame._on_text_written while this
+        # WM_DELETE_WINDOW callback holds the Tcl lock, workers blocked in
+        # root.after() deadlock the UI (Windows "Not Responding").
+        if hasattr(self, 'console_output_frame') and self.console_output_frame is not None:
+            self.console_output_frame.restore_streams()
+
         # Stop live log CSV writer
         if self.live_log_csv is not None:
             self.live_log_csv.stop()
@@ -2354,10 +2427,6 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         
         # Clean up global hotkey
         self.cleanup_GlobalHotkeyMixin()
-        
-        # Restore stdout/stderr streams from console output capture
-        if hasattr(self, 'console_output_frame') and self.console_output_frame is not None:
-            self.console_output_frame.restore_streams()
         
         # Clean up system tray
         if self.system_tray:

@@ -81,10 +81,16 @@ This enhanced version of the LSL Logger App includes system tray functionality a
 
 Theme-aware icons are loaded from the `icons/` folder when present:
 
-- **Dark theme** (default): `LogToLabStreamingLayerIcon.png`, `.ico`, `.icns`, or `.svg`
-- **Light theme**: `LogToLabStreamingLayerIcon_Light.png`, `.ico`, or `.icns`
+- **Dark theme icons** (default):
+  - `LogToLabStreamingLayerIcon.png` - Main application icon
+  - `LogToLabStreamingLayerIcon.ico` - Windows icon
+  - `LogToLabStreamingLayerIcon.icns` - macOS icon
+  - `LogToLabStreamingLayerIcon.svg` - Vector icon
 
-The repository ships with `LogToLabStreamingLayerIcon.svg` only. If PNG/ICO files are missing, the app and tray use a simple drawn **L** fallback icon.
+- **Light theme icons**:
+  - `LogToLabStreamingLayerIcon_Light.png` - Light theme application icon
+  - `LogToLabStreamingLayerIcon_Light.ico` - Light theme Windows icon
+  - `LogToLabStreamingLayerIcon_Light.icns` - Light theme macOS icon
 
 The application detects system theme on Windows (registry) and uses a heuristic elsewhere.
 
@@ -334,6 +340,55 @@ pyenv install 3.9.13
   )
   
 ```
+
+## Output Files
+
+The application saves log/output data to both XDF and CSV file formats simultaneously:
+
+### 1. **CSV Files**
+- **Naming Convention:**  
+  `live_log_<YYYYMMDD>_<HHMMSS>.csv`
+    - Example: `live_log_20260716_164016.csv`
+    - The timestamp reflects the session start time, using your computer's local date and time.
+- **Default Location:**  
+  - By default, CSV files are saved in the directory specified by the app setting (`live_log_csv_dir`). If you haven't configured a custom location, it defaults to a path like:
+    - **Windows:**  
+      `E:\Dropbox (Personal)\Databases\UnparsedData\PhoLogToLabStreamingLayer_logs\csv\`
+    - **macOS/Linux:**  
+      Similar logic; folder can be customized in settings or in environment variables.
+- **Content:**  
+  - Contains a timestamp, event/source indicator, and message for each log entry.
+
+### 2. **XDF Files**
+- **Naming Convention:**  
+  `live_log_<YYYYMMDD>_<HHMMSS>.xdf`
+    - Example: `live_log_20260716_164016.xdf`
+    - Matches the corresponding CSV, both labeled with the same session start time.
+- **Default Location:**  
+  - By default, XDF files are saved to:
+    - **Windows:**  
+      `E:\Dropbox (Personal)\Databases\UnparsedData\PhoLogToLabStreamingLayer_logs\`
+    - **macOS/Linux:**  
+      As above, or set via app configuration.
+- **Content:**  
+  - Multi-stream LSL data, including:
+    - `"TextLogger"`: Arbitrary timestamped notes/messages.
+    - `"EventBoard"`: Event markers, including instantaneous and toggleable events.
+    - `"WhisperLiveLogger"`: (If enabled) Transcription data.
+
+### 3. **Additional Notes:**
+- Folders are created automatically if they do not exist.
+- You can configure or override these save paths in the application settings, via environment variables, or by direct editing in advanced setups.
+- The files' names encode the precise start time, ensuring no conflicts for multiple sessions.
+
+**Summary Table:**
+
+| File Type | Example Filename                 | Default Folder Location                          | Description                    |
+|-----------|----------------------------------|--------------------------------------------------|--------------------------------|
+| CSV       | `live_log_20260716_164016.csv`   | `<log-folder>/csv/`                              | Human-readable log export      |
+| XDF       | `live_log_20260716_164016.xdf`   | `<log-folder>/`                                  | LSL-compatible session stream  |
+
+*`<log-folder>` defaults to `E:\Dropbox (Personal)\Databases\UnparsedData\PhoLogToLabStreamingLayer_logs` on Windows, or can be set per your environment.*
 
 
 ## Building for Agents/AI
