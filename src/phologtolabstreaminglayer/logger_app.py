@@ -41,6 +41,29 @@ _DEFAULT_XDF_FOLDER_RAW = Path(r'E:\Dropbox (Personal)\Databases\UnparsedData\Ph
 _resolved_default_xdf_folder: Optional[Path] = None
 _LIVE_LOG_CSV_SETTINGS_FILE = Path("live_log_csv_settings.json")
 _RECORDING_SETTINGS_FILE = Path("recording_settings.json")
+_LIVE_AUDIO_SETTINGS_FILE = Path("live_audio_settings.json")
+PREFERRED_MIC_DEVICE_SUBSTRING = "HD Pro Webcam C920"
+
+
+def preferred_audio_device_label(
+    device_list: List[str],
+    substring: str = PREFERRED_MIC_DEVICE_SUBSTRING,
+    fallback: str = "Default",
+) -> str:
+    """Return the first device label containing `substring`, else `fallback`."""
+    for label in device_list:
+        if substring in label:
+            return label
+    ## END for label in device_list....
+
+    return fallback
+
+
+def audio_device_name_from_label(label: str) -> str:
+    """Strip the PortAudio index prefix from a combo label; pass Default through."""
+    if label == "Default" or ": " not in label:
+        return label
+    return label.split(": ", 1)[1]
 
 
 def get_default_xdf_folder() -> Path:
@@ -138,6 +161,10 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         # XDF recording preferences (auto-start on launch)
         self.auto_start_xdf_on_startup = True
         self._init_recording_settings()
+
+        # Live Audio mic preference (must load before setup_gui populates the combo)
+        self.saved_mic_device_name: Optional[str] = None
+        self._init_live_audio_settings()
         
         # Create GUI elements first
         self.setup_gui()
@@ -699,6 +726,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
 
         # ------------------------- Live Audio Tab -------------------------
         self.setup_gui_LiveWhisperTranscriptionAppMixin(live_audio_tab, row=0)
+        self.audio_device_combo.bind("<<ComboboxSelected>>", self._on_audio_device_selected)
 
         # ------------------------- EventBoard Tab -------------------------
         self.setup_eventboard_gui(eventboard_tab, row=0)
@@ -782,6 +810,25 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         # Create collapsible console output frame for stdout/stderr capture
         self.console_output_frame = ConsoleOutputFrame(self.root, root=self.root, capture_stdout=True, capture_stderr=True, max_lines=10000, initial_visible=False, height=8)
         self.console_output_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=10, pady=(0, 10))
+
+
+    def refresh_audio_devices(self):
+        """Refresh audio inputs; restore a saved mic by name, else factory C920."""
+        super().refresh_audio_devices()
+        current = self.audio_device_var.get()
+        device_list = list(self.audio_device_combo["values"])
+        if current in device_list and current != "Default":
+            return
+        saved = getattr(self, "saved_mic_device_name", None)
+        if saved == "Default":
+            self.audio_device_var.set("Default")
+            return
+        if saved:
+            matched = preferred_audio_device_label(device_list, substring=saved, fallback="")
+            if matched:
+                self.audio_device_var.set(matched)
+                return
+        self.audio_device_var.set(preferred_audio_device_label(device_list))
     
 
     def setup_stream_monitor_gui(self, parent, row: int = 2):
@@ -976,6 +1023,52 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
             self.live_log_csv.reconfigure(Path(chosen))
             self.save_live_log_csv_settings()
             self.root.after(150, self._refresh_live_log_csv_file_label)
+
+    def _default_live_audio_settings(self) -> Dict[str, Any]:
+        return {"mic_device_name": None}
+
+    def load_live_audio_settings(self) -> Dict[str, Any]:
+        """Load Live Audio mic preference; missing file/key uses factory C920."""
+        defaults = self._default_live_audio_settings()
+        if not _LIVE_AUDIO_SETTINGS_FILE.exists():
+            return defaults
+        try:
+            with open(_LIVE_AUDIO_SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            name = data.get("mic_device_name", None)
+            if name is None:
+                return defaults
+            name = str(name).strip()
+            if not name:
+                return defaults
+            return {"mic_device_name": name}
+        except Exception as e:
+            print(f"Error loading live audio settings: {e}")
+            return defaults
+
+    def save_live_audio_settings(self) -> None:
+        """Persist the last user-selected Live Audio mic name."""
+        payload = {"mic_device_name": self.saved_mic_device_name}
+        try:
+            with open(_LIVE_AUDIO_SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+        except Exception as e:
+            print(f"Error saving live audio settings: {e}")
+
+    def _init_live_audio_settings(self) -> None:
+        """Load saved mic name into instance state before the combo is populated."""
+        settings = self.load_live_audio_settings()
+        self.saved_mic_device_name = settings.get("mic_device_name")
+        if self.saved_mic_device_name:
+            print(f"Live Audio saved mic: {self.saved_mic_device_name}")
+        else:
+            print("Live Audio saved mic: unset (factory C920)")
+
+    def _on_audio_device_selected(self, event=None) -> None:
+        """Persist a manual dropdown pick by device name (including Default)."""
+        label = self.audio_device_var.get()
+        self.saved_mic_device_name = audio_device_name_from_label(label)
+        self.save_live_audio_settings()
 
     def _default_recording_settings(self) -> Dict[str, Any]:
         return {"auto_start_on_startup": True}

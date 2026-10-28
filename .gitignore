@@ -21,3 +21,6 @@ data/_test_xdf_output
 EXTERNAL/lab-recorder-python
 EXTERNAL/whisper-timestamped
 EXTERNAL/PhoPyLSLhelper
+
+# Machine-local Live Audio mic preference
+live_audio_settings.json
