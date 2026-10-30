@@ -1188,7 +1188,7 @@ wheels = [
 
 [[package]]
 name = "phologtolabstreaminglayer"
-version = "0.3.9"
+version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "attrs", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },

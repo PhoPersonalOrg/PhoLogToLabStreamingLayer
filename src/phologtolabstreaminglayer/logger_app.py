@@ -43,6 +43,9 @@ _LIVE_LOG_CSV_SETTINGS_FILE = Path("live_log_csv_settings.json")
 _RECORDING_SETTINGS_FILE = Path("recording_settings.json")
 _LIVE_AUDIO_SETTINGS_FILE = Path("live_audio_settings.json")
 PREFERRED_MIC_DEVICE_SUBSTRING = "HD Pro Webcam C920"
+_DEFAULT_AUTO_SPLIT_MINUTES = 30
+_RECORDING_STOP_JOIN_TIMEOUT = 15.0
+_MAX_AUTO_SPLIT_MINUTES = 1440
 
 
 def preferred_audio_device_label(
@@ -147,6 +150,13 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         self.stream_monitor_thread: Optional[threading.Thread] = None
         self.stream_discovery_active = False
         self.auto_start_attempted = False  # Track if we've tried to auto-start recording
+        self._attach_lock = threading.Lock()
+        self._split_in_progress = False
+        self._auto_split_after_id = None
+        self._next_split_datetime = None
+        self._closing = False
+        self.auto_add_new_streams = True
+        self.auto_split_minutes = _DEFAULT_AUTO_SPLIT_MINUTES
         
         self.capture_stream_start_timestamps() ## `EasyTimeSyncParsingMixin`: capture timestamps for use in LSL streams
         self.capture_recording_start_timestamps() ## capture timestamps for use in LSL streams
@@ -550,6 +560,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
 
             # Start system tray in a separate thread
             threading.Thread(target=self.system_tray.run, daemon=True).start()
+            self._update_tray_tooltip()
 
         except Exception as e:
             print(f"Error setting up system tray: {e}")
@@ -1071,7 +1082,18 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         self.save_live_audio_settings()
 
     def _default_recording_settings(self) -> Dict[str, Any]:
-        return {"auto_start_on_startup": True}
+        return {
+            "auto_start_on_startup": True,
+            "auto_add_new_streams": True,
+            "auto_split_minutes": _DEFAULT_AUTO_SPLIT_MINUTES,
+        }
+
+    def _clamp_auto_split_minutes(self, value: Any) -> int:
+        try:
+            minutes = int(value)
+        except (TypeError, ValueError):
+            minutes = _DEFAULT_AUTO_SPLIT_MINUTES
+        return max(0, min(_MAX_AUTO_SPLIT_MINUTES, minutes))
 
     def load_recording_settings(self) -> Dict[str, Any]:
         """Load XDF recording preferences; missing file uses defaults."""
@@ -1083,6 +1105,10 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
                 data = json.load(f)
             return {
                 "auto_start_on_startup": bool(data.get("auto_start_on_startup", defaults["auto_start_on_startup"])),
+                "auto_add_new_streams": bool(data.get("auto_add_new_streams", defaults["auto_add_new_streams"])),
+                "auto_split_minutes": self._clamp_auto_split_minutes(
+                    data.get("auto_split_minutes", defaults["auto_split_minutes"])
+                ),
             }
         except Exception as e:
             print(f"Error loading recording settings: {e}")
@@ -1090,7 +1116,11 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
 
     def save_recording_settings(self) -> None:
         """Persist XDF recording preferences."""
-        payload = {"auto_start_on_startup": bool(self.auto_start_xdf_on_startup)}
+        payload = {
+            "auto_start_on_startup": bool(self.auto_start_xdf_on_startup),
+            "auto_add_new_streams": bool(self.auto_add_new_streams),
+            "auto_split_minutes": self._clamp_auto_split_minutes(self.auto_split_minutes),
+        }
         try:
             with open(_RECORDING_SETTINGS_FILE, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)
@@ -1101,10 +1131,14 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         """Load recording settings into instance flags."""
         settings = self.load_recording_settings()
         self.auto_start_xdf_on_startup = bool(settings["auto_start_on_startup"])
+        self.auto_add_new_streams = bool(settings["auto_add_new_streams"])
+        self.auto_split_minutes = self._clamp_auto_split_minutes(settings["auto_split_minutes"])
         if self.auto_start_xdf_on_startup:
             print("XDF auto-start on startup: enabled")
         else:
             print("XDF auto-start on startup: disabled")
+        print(f"XDF auto-add new streams: {'enabled' if self.auto_add_new_streams else 'disabled'}")
+        print(f"XDF auto-split minutes: {self.auto_split_minutes}")
 
     def setup_recording_settings_gui(self, parent) -> None:
         """Settings tab group for XDF recording preferences."""
@@ -1121,9 +1155,48 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         )
         enable_cb.grid(row=0, column=0, sticky=tk.W)
 
+        self.auto_add_streams_var = tk.BooleanVar(value=self.auto_add_new_streams)
+        auto_add_cb = ttk.Checkbutton(
+            frame,
+            text="Auto-add newly discovered LSL streams to the open XDF",
+            variable=self.auto_add_streams_var,
+            command=self._on_auto_add_streams_toggled,
+        )
+        auto_add_cb.grid(row=1, column=0, sticky=tk.W, pady=(6, 0))
+
+        split_row = ttk.Frame(frame)
+        split_row.grid(row=2, column=0, sticky=tk.W, pady=(6, 0))
+        ttk.Label(split_row, text="Auto-split interval (minutes, 0 = off):").grid(row=0, column=0, sticky=tk.W)
+        self.auto_split_minutes_var = tk.IntVar(value=self.auto_split_minutes)
+        split_spin = ttk.Spinbox(
+            split_row,
+            from_=0,
+            to=_MAX_AUTO_SPLIT_MINUTES,
+            textvariable=self.auto_split_minutes_var,
+            width=6,
+            command=self._on_auto_split_minutes_changed,
+        )
+        split_spin.grid(row=0, column=1, padx=(8, 0))
+        split_spin.bind("<FocusOut>", self._on_auto_split_minutes_changed)
+        split_spin.bind("<Return>", self._on_auto_split_minutes_changed)
+
     def _on_auto_start_xdf_toggled(self) -> None:
         self.auto_start_xdf_on_startup = bool(self.auto_start_xdf_var.get())
         self.save_recording_settings()
+
+    def _on_auto_add_streams_toggled(self) -> None:
+        self.auto_add_new_streams = bool(self.auto_add_streams_var.get())
+        self.save_recording_settings()
+
+    def _on_auto_split_minutes_changed(self, event=None) -> None:
+        self.auto_split_minutes = self._clamp_auto_split_minutes(self.auto_split_minutes_var.get())
+        try:
+            self.auto_split_minutes_var.set(self.auto_split_minutes)
+        except tk.TclError:
+            pass
+        self.save_recording_settings()
+        if self.recording:
+            self._schedule_auto_split()
 
     def get_default_eventboard_config(self):
         """Get default EventBoard configuration"""
@@ -1526,6 +1599,8 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         
         recording_method = "LabRecorder" if self.is_lab_recorder_available() else "Legacy"
         self.update_log_display(f"XDF Recording started ({recording_method})", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        self._schedule_auto_split()
+        self._update_tray_tooltip()
 
 
     def _try_auto_start_after_stream_discovery(self):
@@ -1596,6 +1671,8 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
             auto_start_message = f"RECORDING_AUTO_STARTED: {new_filename}"
             self.send_lsl_message(auto_start_message)  # Send via LSL
             print(f"Auto-started recording to: {self.xdf_filename}")
+            self._schedule_auto_split()
+            self._update_tray_tooltip()
 
         except Exception as e:
             print(f"Error auto-starting recording: {e}")
@@ -1647,14 +1724,11 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
             while self.recording and not self._shutting_down:
                 try:
                     # Check if LabRecorder is still recording
-                    if hasattr(self.lab_recorder, 'is_recording') and not self.lab_recorder.is_recording:
+                    if not self._lab_recorder_is_recording():
                         print("LabRecorder stopped recording unexpectedly")
                         # Notify user via GUI
                         if not self._shutting_down:
-                            self.root.after(0, lambda: self.update_log_display(
-                                "Warning: LabRecorder stopped unexpectedly", 
-                                datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            ))
+                            self.root.after(0, self._on_recorder_stopped_unexpectedly)
                         break
                     
                     # Reset error counter on successful check
@@ -1752,6 +1826,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
             return
         
         self.recording = False
+        self._cancel_auto_split_timer()
 
         # Stop taskbar overlay flashing
         self.stop_taskbar_overlay_flash()
@@ -1762,7 +1837,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
    
         # Wait for recording thread to finish
         if self.recording_thread and self.recording_thread.is_alive():
-            self.recording_thread.join(timeout=2.0)
+            self.recording_thread.join(timeout=_RECORDING_STOP_JOIN_TIMEOUT)
         
         # Handle file saving based on recording method
         if self.is_lab_recorder_service_available() or self.is_lab_recorder_available():
@@ -1791,23 +1866,113 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         
         recording_method = "LabRecorder" if self.is_lab_recorder_available() else "Legacy"
         self.update_log_display(f"XDF Recording stopped and saved ({recording_method})", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        self._update_tray_tooltip()
 
 
-    def split_recording(self):
-        """Split recording into a new file - stop current and start new"""
-        if not self.recording:
+    def split_recording(self, reason: str = "manual"):
+        """Split recording into a new file - rotate in-process, or stop+start for RCS/legacy."""
+        if not self.recording or self._split_in_progress:
             return
         
+        self._split_in_progress = True
         try:
-            # Stop current recording (this will save the current data)
-            self.stop_recording()
-            
-            # Wait a moment for the stop to complete
-            self.root.after(100, self.start_new_split_recording)
-            
+            if self.is_lab_recorder_service_available():
+                self.stop_recording()
+                self.start_new_split_recording()
+            elif self.lab_recorder is not None and self._lab_recorder_is_recording() and hasattr(self.lab_recorder, "rotate_file"):
+                self._rotate_in_process_recording()
+            else:
+                self.stop_recording()
+                self.start_new_split_recording()
         except Exception as e:
             print(f"Error splitting recording: {e}")
             self.update_log_display(f"Split recording failed: {str(e)}", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        finally:
+            self._split_in_progress = False
+            if self.recording:
+                self._schedule_auto_split()
+                self._update_tray_tooltip()
+
+    def _rotate_in_process_recording(self) -> None:
+        """Close the current XDF with footers and continue into a new file without dropping inlets."""
+        new_filename, _timestamps = self._common_initiate_recording(allow_prompt_user_for_filename=False)
+        if not new_filename:
+            return
+        self.lab_recorder.rotate_file(self.xdf_filename)
+        try:
+            if not self._shutting_down:
+                self.recording_status_label.config(text="Recording...", foreground="green")
+                self.start_recording_button.config(state="disabled")
+                self.stop_recording_button.config(state="normal")
+                self.split_recording_button.config(state="normal")
+                self.status_info_label.config(text=f"Split to: {os.path.basename(self.xdf_filename)}")
+        except tk.TclError:
+            pass
+        split_message = f"RECORDING_SPLIT_NEW_FILE: {new_filename}"
+        self.send_lsl_message(split_message)
+        self.update_log_display(f"Recording split to new file: {new_filename}", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        print(f"Split recording to new file: {self.xdf_filename}")
+        self.start_taskbar_overlay_flash()
+
+    def _schedule_auto_split(self) -> None:
+        self._cancel_auto_split_timer()
+        minutes = self._clamp_auto_split_minutes(getattr(self, "auto_split_minutes", 0))
+        if (not self.recording) or minutes <= 0 or self._shutting_down:
+            self._next_split_datetime = None
+            return
+        delay_ms = int(minutes * 60 * 1000)
+        self._next_split_datetime = datetime.now() + timedelta(minutes=minutes)
+        try:
+            self._auto_split_after_id = self.root.after(delay_ms, self._on_auto_split_timer)
+        except tk.TclError:
+            self._auto_split_after_id = None
+            self._next_split_datetime = None
+
+    def _cancel_auto_split_timer(self) -> None:
+        after_id = getattr(self, "_auto_split_after_id", None)
+        if after_id is not None:
+            try:
+                self.root.after_cancel(after_id)
+            except Exception:
+                pass
+            self._auto_split_after_id = None
+        self._next_split_datetime = None
+
+    def _on_auto_split_timer(self) -> None:
+        self._auto_split_after_id = None
+        if self.recording and not self._shutting_down:
+            self.split_recording(reason="auto")
+
+    def _on_recorder_stopped_unexpectedly(self) -> None:
+        self.update_log_display(
+            "Warning: LabRecorder stopped unexpectedly",
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        self._update_tray_tooltip()
+
+    def _recording_status_title(self) -> str:
+        if not getattr(self, "recording", False):
+            return "LSL Logger: Not recording"
+        name = os.path.basename(getattr(self, "xdf_filename", "") or "recording.xdf")
+        try:
+            with self._stream_discovery_lock:
+                n_selected = len(self.selected_streams)
+        except Exception:
+            n_selected = 0
+        next_split = ""
+        if getattr(self, "_next_split_datetime", None) is not None:
+            next_split = f" | next split {self._next_split_datetime.strftime('%H:%M:%S')}"
+        return f"LSL Logger: Recording {n_selected} streams → {name}{next_split}"
+
+    def _update_tray_tooltip(self) -> None:
+        tray = getattr(self, "system_tray", None)
+        if tray is None:
+            return
+        title = self._recording_status_title()
+        try:
+            tray.title = title
+        except Exception:
+            pass
 
 
     def start_new_split_recording(self):
@@ -1849,6 +2014,8 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
             self.send_lsl_message(split_message)  # Send via LSL
             self.update_log_display(f"Recording split to new file: {new_filename}", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
             print(f"Split recording to new file: {self.xdf_filename}")
+            self._schedule_auto_split()
+            self._update_tray_tooltip()
             
         except Exception as e:
             print(f"Error starting new split recording: {e}")
@@ -2197,7 +2364,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
                 print("LabRecorderService cleaned up successfully")
             if self.lab_recorder is not None:
                 # Stop any active recording
-                if hasattr(self.lab_recorder, 'is_recording') and self.lab_recorder.is_recording:
+                if self._lab_recorder_is_recording():
                     self.lab_recorder.stop_recording()
                 self.lab_recorder = None
                 print("LabRecorder cleaned up successfully")
@@ -2251,28 +2418,20 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
                     except Exception as e:
                         print(f"Error processing stream {stream}: {e}")
                         continue
-                
+                ## END for stream in streams....
+
                 # Check for changes and notify of disconnections
-                # Use lock to safely compare and update discovered_streams
                 new_streams = set()
+                infos_to_attach: List[pylsl.StreamInfo] = []
                 with self._stream_discovery_lock:
-                    if self._shutting_down:
-                        break
-                    if new_discovered != self.discovered_streams:
-                        # Detect disconnected streams
-                        disconnected_streams = set(self.discovered_streams.keys()) - set(new_discovered.keys())
-                        if disconnected_streams:
-                            print(f"Streams disconnected: {disconnected_streams}")
-                            # Remove disconnected streams from selection
-                            for stream_key in disconnected_streams:
-                                self.selected_streams.discard(stream_key)
-                        
-                        # Detect new streams
-                        new_streams = set(new_discovered.keys()) - set(self.discovered_streams.keys())
-                        if new_streams:
-                            print(f"New streams discovered: {new_streams}")
-                        
-                        self.discovered_streams = new_discovered
+                    maps_changed = new_discovered != self.discovered_streams
+                    shutting_down = self._shutting_down
+                if shutting_down:
+                    break
+                if maps_changed:
+                    new_streams, infos_to_attach = self._apply_discovered_streams(new_discovered)
+                    if new_streams:
+                        print(f"New streams discovered: {new_streams}")
                 
                 # Schedule GUI update on main thread (outside lock to avoid blocking)
                 if not self._shutting_down:
@@ -2282,6 +2441,8 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
                     if not self.auto_start_attempted and new_streams:
                         # Auto-select own streams and try to start recording
                         self.root.after(500, self._try_auto_start_after_stream_discovery)
+                    elif new_streams and self.recording and infos_to_attach:
+                        self._schedule_attach_new_streams(infos_to_attach)
                 
                 # Wait before next discovery cycle
                 time.sleep(2.0)
@@ -2333,12 +2494,16 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
 
     def select_stream(self, stream_key: str, selected: bool = True):
         """Select or deselect a stream for recording"""
+        info = None
         with self._stream_discovery_lock:
             if selected:
                 self.selected_streams.add(stream_key)
+                info = self.discovered_streams.get(stream_key)
             else:
                 self.selected_streams.discard(stream_key)
         print(f"Stream {stream_key} {'selected' if selected else 'deselected'}")
+        if selected and info is not None and self.recording:
+            self._schedule_attach_new_streams([info])
     
 
     def get_selected_streams(self) -> List[pylsl.StreamInfo]:
@@ -2352,7 +2517,103 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
                 except KeyError:
                     # Stream was removed between iteration and access, skip it
                     continue
+            ## END for stream_key in self.selected_streams....
+
         return selected
+
+    def _apply_discovered_streams(self, new_discovered: Dict[str, pylsl.StreamInfo]) -> Tuple[set, List[pylsl.StreamInfo]]:
+        """Update discovered/selected maps. Returns (new_keys, infos to attach)."""
+        newly_selected_infos: List[pylsl.StreamInfo] = []
+        new_keys: set = set()
+        with self._stream_discovery_lock:
+            if self._shutting_down:
+                return set(), []
+            old_keys = set(self.discovered_streams.keys())
+            new_keys = set(new_discovered.keys()) - old_keys
+            disconnected_streams = old_keys - set(new_discovered.keys())
+            for stream_key in disconnected_streams:
+                self.selected_streams.discard(stream_key)
+            ## END for stream_key in disconnected_streams....
+
+            if bool(getattr(self, "auto_add_new_streams", True)):
+                for stream_key in new_keys:
+                    self.selected_streams.add(stream_key)
+                    newly_selected_infos.append(new_discovered[stream_key])
+                ## END for stream_key in new_keys....
+
+            self.discovered_streams = new_discovered
+        return new_keys, newly_selected_infos
+
+    def _schedule_attach_new_streams(self, stream_infos: List[pylsl.StreamInfo]) -> None:
+        if not stream_infos or not self.recording or self._shutting_down:
+            return
+        threading.Thread(
+            target=self._attach_streams_to_open_recording,
+            args=(list(stream_infos),),
+            daemon=True,
+        ).start()
+
+    def _lab_recorder_is_recording(self) -> bool:
+        rec = getattr(self, "lab_recorder", None)
+        if rec is None:
+            return False
+        method = getattr(rec, "is_recording", None)
+        if callable(method):
+            try:
+                return bool(method())
+            except Exception:
+                return False
+        return bool(method)
+
+    def _attach_streams_to_open_recording(self, stream_infos: List[pylsl.StreamInfo]) -> None:
+        if not stream_infos or not self.recording or self._shutting_down:
+            return
+        names = []
+        for info in stream_infos:
+            try:
+                names.append(info.name())
+            except Exception:
+                names.append(str(info))
+        ## END for info in stream_infos....
+
+        with self._attach_lock:
+            try:
+                if self.is_lab_recorder_service_available():
+                    client = self.lab_recorder_service_client
+                    if client is None:
+                        return
+                    client.send_command("update")
+                    time.sleep(2.0)
+                    client.send_command("select all")
+                elif self.lab_recorder is not None and self._lab_recorder_is_recording():
+                    attach = getattr(self.lab_recorder, "attach_streams", None)
+                    if callable(attach):
+                        attach(stream_infos)
+                    else:
+                        print("LabRecorder.attach_streams is unavailable")
+                        return
+                else:
+                    return
+            except Exception as e:
+                print(f"Error attaching new streams to recording: {e}")
+                if not self._shutting_down:
+                    self.root.after(0, lambda: self.update_log_display(
+                        f"Failed to add stream(s) to recording: {e}",
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    ))
+                return
+
+        message = f"STREAM_ADDED_TO_RECORDING: {', '.join(names)}"
+        if not self._shutting_down:
+            self.root.after(0, lambda: self._notify_streams_added(message))
+
+    def _notify_streams_added(self, message: str) -> None:
+        self.update_log_display(message, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        try:
+            self.send_lsl_message(message)
+        except Exception as e:
+            print(f"Error sending STREAM_ADDED_TO_RECORDING LSL message: {e}")
+        self._update_tray_tooltip()
     
 
     def auto_select_own_streams(self):
@@ -2402,14 +2663,18 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
                 except Exception as e:
                     print(f"Error processing stream during refresh: {e}")
                     continue
-            
-            with self._stream_discovery_lock:
-                self.discovered_streams = new_discovered
+            ## END for stream in streams....
+
+            new_keys, infos_to_attach = self._apply_discovered_streams(new_discovered)
             self.update_stream_tree_display()
             
             # Update status
             self.update_log_display(f"Stream refresh completed: {len(new_discovered)} streams found", 
                                   datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            if new_keys:
+                print(f"New streams discovered on refresh: {new_keys}")
+            if self.recording and infos_to_attach:
+                self._schedule_attach_new_streams(infos_to_attach)
             
         except Exception as e:
             error_msg = f"Error refreshing streams: {e}"
@@ -2481,9 +2746,13 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
     
 
     def on_closing(self):
-        """Handle window closing"""
+        """Handle application exit (tray Exit / SIGINT). Window X hides to tray instead."""
+        if getattr(self, "_closing", False):
+            return
+        self._closing = True
         # Set shutdown flag to prevent GUI updates
         self._shutting_down = True
+        self._cancel_auto_split_timer()
 
         # Detach stdout/stderr from the Tk console BEFORE any stop_* work.
         # stop_live_transcription / labrecorder / stream watch all print; if those

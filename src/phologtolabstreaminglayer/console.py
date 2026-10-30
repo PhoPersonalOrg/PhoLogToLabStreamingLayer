@@ -28,12 +28,12 @@ def main(xdf_folder: Path, unsafe: bool = False):
         root.destroy()
         sys.exit(1)
 
-    def on_closing():
+    def on_window_close():
         if app is not None:
-            app.on_closing()
+            app.minimize_to_tray()
         else:
             root.destroy()
-    root.protocol("WM_DELETE_WINDOW", on_closing)
+    root.protocol("WM_DELETE_WINDOW", on_window_close)
 
     mark("entering mainloop")
     root.mainloop()

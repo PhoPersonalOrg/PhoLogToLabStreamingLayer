@@ -1,3 +1,5 @@
 {
-  "auto_start_on_startup": true
+  "auto_start_on_startup": true,
+  "auto_add_new_streams": true,
+  "auto_split_minutes": 90
 }
