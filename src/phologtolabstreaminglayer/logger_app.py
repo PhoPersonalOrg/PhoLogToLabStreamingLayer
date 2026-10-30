@@ -30,6 +30,12 @@ from phologtolabstreaminglayer.features.global_hotkey import GlobalHotkeyMixin
 from phologtolabstreaminglayer.features.recording_indicator_icon import RecordingIndicatorIconMixin
 from phologtolabstreaminglayer.features.console_output_tk import ConsoleOutputFrame
 from phologtolabstreaminglayer.features.live_log_csv import LiveLogCsvWriter, default_live_log_csv_dir
+from phologtolabstreaminglayer.features.raw_audio import (
+    RawAudioRecorder,
+    format_audio_file_started,
+    format_audio_file_stopped,
+    wav_path_for_xdf_filename,
+)
 
 mark("logger_app.py imports complete")
 
@@ -157,6 +163,8 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         self._closing = False
         self.auto_add_new_streams = True
         self.auto_split_minutes = _DEFAULT_AUTO_SPLIT_MINUTES
+        self.record_raw_audio = True
+        self._raw_audio_recorder = None
         
         self.capture_stream_start_timestamps() ## `EasyTimeSyncParsingMixin`: capture timestamps for use in LSL streams
         self.capture_recording_start_timestamps() ## capture timestamps for use in LSL streams
@@ -736,8 +744,14 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         self.setup_stream_monitor_gui(recording_tab, row=2)
 
         # ------------------------- Live Audio Tab -------------------------
-        self.setup_gui_LiveWhisperTranscriptionAppMixin(live_audio_tab, row=0)
+        transcription_frame = self.setup_gui_LiveWhisperTranscriptionAppMixin(live_audio_tab, row=0)
         self.audio_device_combo.bind("<<ComboboxSelected>>", self._on_audio_device_selected)
+        self.raw_audio_status_label = ttk.Label(
+            transcription_frame,
+            text="Raw audio: idle (starts with XDF)",
+            foreground="gray",
+        )
+        self.raw_audio_status_label.grid(row=2, column=0, columnspan=4, sticky=tk.W, pady=(8, 0))
 
         # ------------------------- EventBoard Tab -------------------------
         self.setup_eventboard_gui(eventboard_tab, row=0)
@@ -1086,6 +1100,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
             "auto_start_on_startup": True,
             "auto_add_new_streams": True,
             "auto_split_minutes": _DEFAULT_AUTO_SPLIT_MINUTES,
+            "record_raw_audio": True,
         }
 
     def _clamp_auto_split_minutes(self, value: Any) -> int:
@@ -1109,6 +1124,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
                 "auto_split_minutes": self._clamp_auto_split_minutes(
                     data.get("auto_split_minutes", defaults["auto_split_minutes"])
                 ),
+                "record_raw_audio": bool(data.get("record_raw_audio", defaults["record_raw_audio"])),
             }
         except Exception as e:
             print(f"Error loading recording settings: {e}")
@@ -1120,6 +1136,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
             "auto_start_on_startup": bool(self.auto_start_xdf_on_startup),
             "auto_add_new_streams": bool(self.auto_add_new_streams),
             "auto_split_minutes": self._clamp_auto_split_minutes(self.auto_split_minutes),
+            "record_raw_audio": bool(getattr(self, "record_raw_audio", True)),
         }
         try:
             with open(_RECORDING_SETTINGS_FILE, "w", encoding="utf-8") as f:
@@ -1133,12 +1150,14 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         self.auto_start_xdf_on_startup = bool(settings["auto_start_on_startup"])
         self.auto_add_new_streams = bool(settings["auto_add_new_streams"])
         self.auto_split_minutes = self._clamp_auto_split_minutes(settings["auto_split_minutes"])
+        self.record_raw_audio = bool(settings.get("record_raw_audio", True))
         if self.auto_start_xdf_on_startup:
             print("XDF auto-start on startup: enabled")
         else:
             print("XDF auto-start on startup: disabled")
         print(f"XDF auto-add new streams: {'enabled' if self.auto_add_new_streams else 'disabled'}")
         print(f"XDF auto-split minutes: {self.auto_split_minutes}")
+        print(f"XDF raw audio: {'enabled' if self.record_raw_audio else 'disabled'}")
 
     def setup_recording_settings_gui(self, parent) -> None:
         """Settings tab group for XDF recording preferences."""
@@ -1180,6 +1199,15 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         split_spin.bind("<FocusOut>", self._on_auto_split_minutes_changed)
         split_spin.bind("<Return>", self._on_auto_split_minutes_changed)
 
+        self.record_raw_audio_var = tk.BooleanVar(value=self.record_raw_audio)
+        raw_audio_cb = ttk.Checkbutton(
+            frame,
+            text="Record raw audio with XDF",
+            variable=self.record_raw_audio_var,
+            command=self._on_record_raw_audio_toggled,
+        )
+        raw_audio_cb.grid(row=3, column=0, sticky=tk.W, pady=(6, 0))
+
     def _on_auto_start_xdf_toggled(self) -> None:
         self.auto_start_xdf_on_startup = bool(self.auto_start_xdf_var.get())
         self.save_recording_settings()
@@ -1197,6 +1225,24 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         self.save_recording_settings()
         if self.recording:
             self._schedule_auto_split()
+
+    def _on_record_raw_audio_toggled(self) -> None:
+        self.record_raw_audio = bool(self.record_raw_audio_var.get())
+        self.save_recording_settings()
+        if self.record_raw_audio and getattr(self, "transcription_config", None) is not None:
+            self.transcription_config.write_audio_wav = False
+        if self.recording:
+            if self.record_raw_audio:
+                self._start_raw_audio_if_enabled()
+            else:
+                self._stop_raw_audio()
+        else:
+            self._refresh_raw_audio_status()
+
+    def setup_transcription_config(self):
+        super().setup_transcription_config()
+        if getattr(self, "record_raw_audio", True) and self.transcription_config is not None:
+            self.transcription_config.write_audio_wav = False
 
     def get_default_eventboard_config(self):
         """Get default EventBoard configuration"""
@@ -1600,6 +1646,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         recording_method = "LabRecorder" if self.is_lab_recorder_available() else "Legacy"
         self.update_log_display(f"XDF Recording started ({recording_method})", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         self._schedule_auto_split()
+        self._start_raw_audio_if_enabled()
         self._update_tray_tooltip()
 
 
@@ -1672,6 +1719,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
             self.send_lsl_message(auto_start_message)  # Send via LSL
             print(f"Auto-started recording to: {self.xdf_filename}")
             self._schedule_auto_split()
+            self._start_raw_audio_if_enabled()
             self._update_tray_tooltip()
 
         except Exception as e:
@@ -1831,6 +1879,9 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         # Stop taskbar overlay flashing
         self.stop_taskbar_overlay_flash()
 
+        # Finalize WAV before joining the recorder so AUDIO_FILE_STOPPED lands in this XDF
+        self._stop_raw_audio()
+
         # Log the stop event via LSL before saving
         stop_message = f"RECORDING_STOPPED: {os.path.basename(self.xdf_filename)}"
         self.send_lsl_message(stop_message)
@@ -1895,6 +1946,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
 
     def _rotate_in_process_recording(self) -> None:
         """Close the current XDF with footers and continue into a new file without dropping inlets."""
+        self._stop_raw_audio()
         new_filename, _timestamps = self._common_initiate_recording(allow_prompt_user_for_filename=False)
         if not new_filename:
             return
@@ -1913,6 +1965,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         self.update_log_display(f"Recording split to new file: {new_filename}", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         print(f"Split recording to new file: {self.xdf_filename}")
         self.start_taskbar_overlay_flash()
+        self._start_raw_audio_if_enabled()
 
     def _schedule_auto_split(self) -> None:
         self._cancel_auto_split_timer()
@@ -1944,6 +1997,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
             self.split_recording(reason="auto")
 
     def _on_recorder_stopped_unexpectedly(self) -> None:
+        self._stop_raw_audio()
         self.update_log_display(
             "Warning: LabRecorder stopped unexpectedly",
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1962,7 +2016,11 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         next_split = ""
         if getattr(self, "_next_split_datetime", None) is not None:
             next_split = f" | next split {self._next_split_datetime.strftime('%H:%M:%S')}"
-        return f"LSL Logger: Recording {n_selected} streams → {name}{next_split}"
+        wav_bit = ""
+        rec = getattr(self, "_raw_audio_recorder", None)
+        if rec is not None and getattr(rec, "is_recording", False) and getattr(rec, "path", None) is not None:
+            wav_bit = f" | {Path(rec.path).name}"
+        return f"LSL Logger: Recording {n_selected} streams → {name}{next_split}{wav_bit}"
 
     def _update_tray_tooltip(self) -> None:
         tray = getattr(self, "system_tray", None)
@@ -1973,6 +2031,124 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
             tray.title = title
         except Exception:
             pass
+
+    def _selected_mic_device(self):
+        """PortAudio index from the Live Audio combo, or None for Default."""
+        var = getattr(self, "audio_device_var", None)
+        if var is None:
+            return None
+        try:
+            selected = var.get()
+        except Exception:
+            return None
+        if not selected or selected == "Default":
+            return None
+        try:
+            return int(str(selected).split(":")[0])
+        except Exception:
+            return None
+
+    def _refresh_raw_audio_status(self) -> None:
+        label = getattr(self, "raw_audio_status_label", None)
+        if label is None:
+            return
+        rec = getattr(self, "_raw_audio_recorder", None)
+        if rec is not None and getattr(rec, "is_recording", False) and getattr(rec, "path", None) is not None:
+            text = f"Raw audio: {Path(rec.path).name}"
+            color = "green"
+        elif getattr(self, "record_raw_audio", True):
+            text = "Raw audio: idle (starts with XDF)"
+            color = "gray"
+        else:
+            text = "Raw audio: disabled"
+            color = "gray"
+        try:
+            if not getattr(self, "_shutting_down", False):
+                label.config(text=text, foreground=color)
+        except tk.TclError:
+            pass
+
+    def _on_raw_audio_started(self, info: Dict[str, Any]) -> None:
+        msg = format_audio_file_started(info)
+        try:
+            self.send_lsl_message(msg)
+        except Exception as e:
+            print(f"Error sending AUDIO_FILE_STARTED: {e}")
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        def _ui():
+            try:
+                self.update_log_display(msg, ts)
+            except Exception:
+                pass
+            self._refresh_raw_audio_status()
+            self._update_tray_tooltip()
+
+        root = getattr(self, "root", None)
+        if root is not None and not getattr(self, "_shutting_down", False):
+            try:
+                root.after(0, _ui)
+                return
+            except Exception:
+                pass
+        _ui()
+
+    def _start_raw_audio_if_enabled(self) -> None:
+        if not getattr(self, "record_raw_audio", True):
+            self._refresh_raw_audio_status()
+            return
+        if getattr(self, "_shutting_down", False):
+            return
+        rec = getattr(self, "_raw_audio_recorder", None)
+        if rec is not None and getattr(rec, "is_recording", False):
+            self._refresh_raw_audio_status()
+            return
+        xdf = getattr(self, "xdf_filename", None)
+        if not xdf:
+            return
+        try:
+            if rec is None:
+                rec = RawAudioRecorder(on_started=self._on_raw_audio_started)
+                self._raw_audio_recorder = rec
+            if getattr(self, "transcription_config", None) is not None:
+                self.transcription_config.write_audio_wav = False
+            wav_path = wav_path_for_xdf_filename(xdf)
+            rec.start(wav_path, mic_device=self._selected_mic_device(), sample_rate=16000)
+            self._refresh_raw_audio_status()
+            self._update_tray_tooltip()
+        except Exception as e:
+            print(f"Error starting raw audio: {e}")
+            try:
+                self.update_log_display(
+                    f"Raw audio start failed: {e}",
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                )
+            except Exception:
+                pass
+            self._refresh_raw_audio_status()
+
+    def _stop_raw_audio(self) -> None:
+        rec = getattr(self, "_raw_audio_recorder", None)
+        if rec is None or not getattr(rec, "is_recording", False):
+            self._refresh_raw_audio_status()
+            return
+        try:
+            info = rec.stop()
+        except Exception as e:
+            print(f"Error stopping raw audio: {e}")
+            info = None
+        if info:
+            msg = format_audio_file_stopped(info)
+            try:
+                self.send_lsl_message(msg)
+            except Exception as e:
+                print(f"Error sending AUDIO_FILE_STOPPED: {e}")
+            try:
+                self.update_log_display(msg, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            except Exception:
+                pass
+        self._refresh_raw_audio_status()
+        self._update_tray_tooltip()
 
 
     def start_new_split_recording(self):
@@ -2015,6 +2191,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
             self.update_log_display(f"Recording split to new file: {new_filename}", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
             print(f"Split recording to new file: {self.xdf_filename}")
             self._schedule_auto_split()
+            self._start_raw_audio_if_enabled()
             self._update_tray_tooltip()
             
         except Exception as e:

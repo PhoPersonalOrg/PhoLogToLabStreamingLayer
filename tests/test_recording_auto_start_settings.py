@@ -11,6 +11,8 @@ from unittest.mock import patch
 from phologtolabstreaminglayer import logger_app as logger_app_mod
 from phologtolabstreaminglayer.logger_app import LoggerApp
 
+_DEFAULT_SPLIT = logger_app_mod._DEFAULT_AUTO_SPLIT_MINUTES
+
 
 def _bare_app() -> LoggerApp:
     """Create an uninitialized LoggerApp shell for unit-testing helpers."""
@@ -19,6 +21,7 @@ def _bare_app() -> LoggerApp:
     app.auto_start_attempted = False
     app.auto_add_new_streams = True
     app.auto_split_minutes = 30
+    app.record_raw_audio = True
     app.recording = False
     app._shutting_down = False
     return app
@@ -32,7 +35,8 @@ class TestRecordingAutoStartSettings(unittest.TestCase):
             {
                 "auto_start_on_startup": True,
                 "auto_add_new_streams": True,
-                "auto_split_minutes": 30,
+                "auto_split_minutes": _DEFAULT_SPLIT,
+                "record_raw_audio": True,
             },
         )
 
@@ -46,7 +50,8 @@ class TestRecordingAutoStartSettings(unittest.TestCase):
                     {
                         "auto_start_on_startup": True,
                         "auto_add_new_streams": True,
-                        "auto_split_minutes": 30,
+                        "auto_split_minutes": _DEFAULT_SPLIT,
+                        "record_raw_audio": True,
                     },
                 )
 
@@ -66,6 +71,7 @@ class TestRecordingAutoStartSettings(unittest.TestCase):
                         "auto_start_on_startup": False,
                         "auto_add_new_streams": True,
                         "auto_split_minutes": 30,
+                        "record_raw_audio": True,
                     },
                 )
 
@@ -118,14 +124,15 @@ class TestRecordingAutoStartSettings(unittest.TestCase):
                 loaded = app.load_recording_settings()
                 self.assertFalse(loaded["auto_start_on_startup"])
                 self.assertTrue(loaded["auto_add_new_streams"])
-                self.assertEqual(loaded["auto_split_minutes"], 30)
+                self.assertEqual(loaded["auto_split_minutes"], _DEFAULT_SPLIT)
+                self.assertTrue(loaded["record_raw_audio"])
 
     def test_clamp_auto_split_minutes(self):
         app = _bare_app()
         self.assertEqual(app._clamp_auto_split_minutes(-5), 0)
         self.assertEqual(app._clamp_auto_split_minutes("45"), 45)
         self.assertEqual(app._clamp_auto_split_minutes(99999), 1440)
-        self.assertEqual(app._clamp_auto_split_minutes("nope"), 30)
+        self.assertEqual(app._clamp_auto_split_minutes("nope"), _DEFAULT_SPLIT)
 
     def test_save_and_load_auto_add_and_split_roundtrip(self):
         with tempfile.TemporaryDirectory() as td:

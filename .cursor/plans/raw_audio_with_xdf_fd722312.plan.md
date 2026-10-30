@@ -4,19 +4,19 @@ overview: Add crash-recoverable raw mic WAV files that start, stop, and split wi
 todos:
   - id: openspec
     content: Scaffold OpenSpec change add-raw-audio-xdf (follow-XDF WAV, crash-safe format, TextLogger markers)
-    status: pending
+    status: completed
   - id: recoverable-wav
     content: Implement RecoverableWavWriter + sidecar JSON with periodic RIFF header patch and tests
-    status: pending
+    status: completed
   - id: mic-hub
     content: Add refcounted MicCaptureHub; LiveTranscriber subscribes instead of owning InputStream
-    status: pending
+    status: completed
   - id: xdf-hooks
     content: Start/stop/rotate raw audio with XDF in LoggerApp; emit AUDIO_FILE_STARTED/STOPPED
-    status: pending
+    status: completed
   - id: settings-ui
     content: Persist record_raw_audio, Settings checkbox, Live Audio status, disable Whisper duplicate WAV
-    status: pending
+    status: completed
 isProject: false
 ---
 
