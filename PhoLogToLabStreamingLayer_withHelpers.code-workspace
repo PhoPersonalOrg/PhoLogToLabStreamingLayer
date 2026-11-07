@@ -11,6 +11,12 @@
 		},
 		{
 			"path": "../pyxdf"
+		},
+		{
+			"path": "../xdf-tagger"
+		},
+		{
+			"path": "../LSL"
 		}
 	],
 	"settings": {
