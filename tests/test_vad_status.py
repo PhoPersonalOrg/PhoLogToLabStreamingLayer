@@ -13,13 +13,16 @@ import unittest
 import numpy as np
 
 from phologtolabstreaminglayer.features.vad_status import (
+    METER_DB_FLOOR,
     STATE_IDLE,
     STATE_SILENCE,
     STATE_SPEECH,
     STATE_UNAVAILABLE,
+    MicLevelMeter,
     VadStatusBar,
     VadStatusMixin,
     VadStatusMonitor,
+    block_dbfs,
 )
 from phologtolabstreaminglayer.logger_app import LoggerApp
 from whisper_timestamped.audio_capture import MicCaptureHub
@@ -72,9 +75,12 @@ def _wait_for(predicate, timeout: float = 3.0) -> bool:
     return bool(predicate())
 
 
-def _push_block(hub: MicCaptureHub, n_samples: int = 512) -> None:
-    """Feed the hub exactly one VAD frame via its PortAudio-style callback."""
-    hub._audio_callback(np.zeros((n_samples, 1), dtype=np.float32), n_samples, None, None)
+def _push_block(hub: MicCaptureHub, n_samples: int = 512, data=None) -> None:
+    """Feed the hub one VAD frame via its PortAudio-style callback."""
+    if data is None:
+        data = np.zeros(n_samples, dtype=np.float32)
+    data = np.asarray(data, dtype=np.float32)
+    hub._audio_callback(data.reshape(-1, 1), data.size, None, None)
 
 
 class TestVadStatusMonitor(unittest.TestCase):
@@ -247,6 +253,14 @@ class TestVadStatusBar(unittest.TestCase):
             bar.set_state(state)
             self.assertEqual(str(bar._dot.cget("foreground")), "red")
 
+    def test_footer_forwards_level_to_meter(self):
+        bar = VadStatusBar(self.root)
+        bar.set_level_db(-6.0)
+        x2 = bar._meter.coords(bar._meter._fill)[2]
+        self.assertGreater(x2, 0)
+        bar.set_level_db(METER_DB_FLOOR)
+        self.assertEqual(bar._meter.coords(bar._meter._fill)[2], 0)
+
 
 class _MixinStub(VadStatusMixin):
     def __init__(self, root):
@@ -300,6 +314,106 @@ class TestVadStatusMixin(unittest.TestCase):
         self.stub.cleanup_VadStatusMixin()
         self.assertEqual(stopped, [True])
         self.assertIsNone(self.stub._vad_monitor)
+
+    def test_level_marshals_to_meter(self):
+        self.stub._on_vad_level(-6.0)
+        self.root.update()
+        meter = self.stub.vad_status_bar._meter
+        self.assertGreater(meter.coords(meter._fill)[2], 0)
+
+    def test_level_suppressed_while_shutting_down(self):
+        self.stub._on_vad_level(-6.0)
+        self.root.update()
+        meter = self.stub.vad_status_bar._meter
+        x_before = meter.coords(meter._fill)[2]
+        self.stub._shutting_down = True
+        self.stub._on_vad_level(METER_DB_FLOOR)
+        self.root.update()
+        self.assertEqual(meter.coords(meter._fill)[2], x_before)
+
+
+class TestBlockDbfs(unittest.TestCase):
+    def test_full_scale_square_is_zero_db(self):
+        data = np.ones(1600, dtype=np.float32)
+        self.assertAlmostEqual(block_dbfs(data), 0.0, places=5)
+
+    def test_half_amplitude_sine_is_about_minus_nine_db(self):
+        t = np.arange(16000, dtype=np.float32) / 16000.0
+        data = 0.5 * np.sin(2 * np.pi * 220.0 * t)
+        self.assertAlmostEqual(block_dbfs(data), 20.0 * np.log10(0.5 / np.sqrt(2.0)), delta=0.1)
+
+    def test_silence_and_empty_hit_floor(self):
+        self.assertEqual(block_dbfs(np.zeros(1600, dtype=np.float32)), METER_DB_FLOOR)
+        self.assertEqual(block_dbfs(np.zeros(0, dtype=np.float32)), METER_DB_FLOOR)
+
+    def test_stereo_uses_first_channel(self):
+        data = np.stack([np.ones(800, dtype=np.float32), np.zeros(800, dtype=np.float32)], axis=1)
+        self.assertAlmostEqual(block_dbfs(data), 0.0, places=5)
+
+
+class TestMicLevelMeter(unittest.TestCase):
+    def setUp(self):
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.meter = MicLevelMeter(self.root)
+
+    def tearDown(self):
+        self.root.destroy()
+
+    def test_loud_level_draws_fill(self):
+        self.meter.set_level_db(-6.0, now=100.0)
+        x2 = self.meter.coords(self.meter._fill)[2]
+        self.assertGreater(x2, 0)
+        self.assertLessEqual(x2, self.meter._width)
+        self.assertEqual(str(self.meter.itemcget(self.meter._fill, "fill")), "#e0a800")
+
+    def test_floor_draws_empty_and_hides_peak(self):
+        self.meter.set_level_db(-6.0, now=100.0)
+        self.meter.set_level_db(METER_DB_FLOOR, now=102.0)
+        self.assertEqual(self.meter.coords(self.meter._fill)[2], 0)
+        self.assertEqual(str(self.meter.itemcget(self.meter._peak, "state")), "hidden")
+
+    def test_near_clipping_is_red(self):
+        self.meter.set_level_db(-1.0, now=100.0)
+        self.assertEqual(str(self.meter.itemcget(self.meter._fill, "fill")), "#d93025")
+
+    def test_peak_holds_then_decays(self):
+        self.meter.set_level_db(-6.0, now=100.0)
+        peak_x = self.meter.coords(self.meter._peak)[0]
+        self.assertGreater(peak_x, 0)
+        # Quieter block within the hold window: tick stays at the peak.
+        self.meter.set_level_db(-30.0, now=100.5)
+        self.assertEqual(self.meter.coords(self.meter._peak)[0], peak_x)
+        self.assertEqual(str(self.meter.itemcget(self.meter._peak, "state")), "normal")
+        # After the hold window: tick falls to the current level.
+        self.meter.set_level_db(-30.0, now=101.5)
+        self.assertLess(self.meter.coords(self.meter._peak)[0], peak_x)
+
+    def test_set_level_after_destroy_is_safe(self):
+        self.meter.destroy()
+        self.meter.set_level_db(-6.0)  # must not raise
+
+
+class TestVadMonitorLevel(unittest.TestCase):
+    def test_on_level_emitted_per_block(self):
+        hub = MicCaptureHub(stream_factory=lambda **kw: _FakeStream(**kw))
+        levels = []
+        monitor = VadStatusMonitor(
+            hub=hub,
+            model_factory=lambda: _ScriptedVadModel([0.05]),
+            on_level=levels.append,
+        )
+        monitor.start()
+        try:
+            self.assertTrue(_wait_for(lambda: monitor.state == STATE_IDLE))
+            t = np.arange(512, dtype=np.float32) / 16000.0
+            block = 0.5 * np.sin(2 * np.pi * 220.0 * t)
+            _push_block(hub, data=block)
+            self.assertTrue(_wait_for(lambda: len(levels) >= 1))
+            expected = 20.0 * np.log10(0.5 / np.sqrt(2.0))
+            self.assertAlmostEqual(levels[0], expected, delta=0.2)
+        finally:
+            monitor.stop()
 
 
 class TestLoggerAppVadWiring(unittest.TestCase):

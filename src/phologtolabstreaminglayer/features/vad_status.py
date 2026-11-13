@@ -32,6 +32,14 @@ HANGOVER_S = 0.4  # stay "speech" this long after the last speech frame
 IDLE_TIMEOUT_S = 0.75  # no audio for this long -> hub not running -> idle
 _QUEUE_MAXSIZE = 100
 
+# Mic level meter (footer, right of the VAD text)
+METER_DB_FLOOR = -60.0  # dBFS shown as an empty bar
+METER_DB_YELLOW = -12.0  # above this the fill turns yellow
+METER_DB_RED = -3.0  # above this the fill turns red (near clipping)
+METER_WIDTH = 120
+METER_HEIGHT = 10
+METER_PEAK_HOLD_S = 1.0  # peak tick holds this long, then falls with the level
+
 STATE_LOADING = "loading"
 STATE_IDLE = "idle"
 STATE_SILENCE = "silence"
@@ -63,11 +71,86 @@ def resolve_hub(hub: Optional[Any]) -> Any:
     return get_shared_mic_hub()
 
 
+def block_dbfs(data: np.ndarray, floor_db: float = METER_DB_FLOOR) -> float:
+    """RMS level of a float32 audio block in dBFS, clamped to [floor_db, 0]."""
+    arr = np.asarray(data, dtype=np.float32)
+    if arr.size == 0:
+        return float(floor_db)
+    if arr.ndim == 2:
+        arr = arr[:, 0]
+    rms = float(np.sqrt(np.mean(np.square(arr, dtype=np.float64))))
+    if rms <= 1e-10:
+        return float(floor_db)
+    db = 20.0 * float(np.log10(rms))
+    return max(float(floor_db), min(0.0, db))
+
+
+class MicLevelMeter(tk.Canvas):
+    """Small horizontal mic level bar (dBFS) with a decaying peak-hold tick.
+
+    Only canvas item coordinates/colors are updated per level, so drawing is
+    cheap at the ~20 Hz hub block rate. All updates happen on the Tk thread.
+    """
+
+    def __init__(self, parent, width: int = METER_WIDTH, height: int = METER_HEIGHT, **kwargs):
+        super().__init__(parent, width=width, height=height, highlightthickness=0, **kwargs)
+        self._width = int(width)
+        self._height = int(height)
+        self._bg = self._resolve_bg(parent)
+        self.configure(background=self._bg)
+        self._track = self.create_rectangle(0, 0, self._width, self._height, fill="#d9d9d9", outline="#9a9a9a")
+        self._fill = self.create_rectangle(0, 0, 0, self._height, fill="#2eaa2e", outline="")
+        self._peak = self.create_line(0, 0, 0, self._height, fill="#444444", width=2, state="hidden")
+        self._peak_db: Optional[float] = None
+        self._peak_mono = 0.0
+
+    @staticmethod
+    def _resolve_bg(parent) -> str:
+        try:
+            style = ttk.Style(parent)
+            bg = style.lookup("TFrame", "background")
+            if bg:
+                return str(bg)
+        except Exception:
+            pass
+        return "#f0f0f0"
+
+    def _db_to_x(self, db: float) -> int:
+        frac = (max(METER_DB_FLOOR, min(0.0, db)) - METER_DB_FLOOR) / (0.0 - METER_DB_FLOOR)
+        return int(round(frac * self._width))
+
+    def set_level_db(self, db: float, now: Optional[float] = None) -> None:
+        now = float(time.monotonic() if now is None else now)
+        db = max(METER_DB_FLOOR, min(0.0, float(db)))
+        if db >= METER_DB_RED:
+            color = "#d93025"
+        elif db >= METER_DB_YELLOW:
+            color = "#e0a800"
+        else:
+            color = "#2eaa2e"
+        x = self._db_to_x(db)
+        try:
+            self.coords(self._fill, 0, 0, x, self._height)
+            self.itemconfigure(self._fill, fill=color)
+            if self._peak_db is None or db >= self._peak_db or (now - self._peak_mono) >= METER_PEAK_HOLD_S:
+                self._peak_db = db
+                self._peak_mono = now
+            if self._peak_db <= METER_DB_FLOOR:
+                self.itemconfigure(self._peak, state="hidden")
+            else:
+                px = self._db_to_x(self._peak_db)
+                self.coords(self._peak, px, 0, px, self._height)
+                self.itemconfigure(self._peak, state="normal")
+        except tk.TclError:
+            pass
+
+
 class VadStatusMonitor:
     """Run Silero VAD on shared-hub audio and report speech/silence state changes.
 
     The PortAudio callback only enqueues; a daemon thread does the inference.
     `on_state(state)` fires from that thread only when the state changes.
+    `on_level(db)` fires once per audio block (~20 Hz) with the RMS dBFS level.
     """
 
     def __init__(
@@ -76,6 +159,7 @@ class VadStatusMonitor:
         on_state: Optional[Callable[[str], None]] = None,
         model_factory: Optional[Callable[[], Callable[[np.ndarray], Any]]] = None,
         *,
+        on_level: Optional[Callable[[float], None]] = None,
         sample_rate: int = SAMPLE_RATE,
         speech_threshold: float = SPEECH_THRESHOLD,
         silence_threshold: float = SILENCE_THRESHOLD,
@@ -84,6 +168,7 @@ class VadStatusMonitor:
     ):
         self._hub = hub
         self.on_state = on_state
+        self.on_level = on_level
         self._model_factory = model_factory or default_vad_model_factory
         self.sample_rate = int(sample_rate)
         self.speech_threshold = float(speech_threshold)
@@ -234,6 +319,11 @@ class VadStatusMonitor:
             return
         if data.ndim == 2:
             data = data[:, 0]
+        if self.on_level is not None:
+            try:
+                self.on_level(block_dbfs(data))
+            except Exception:
+                pass
         self._buffer = np.concatenate((self._buffer, data))
         n_frames = self._buffer.size // VAD_FRAME_SAMPLES
         for i in range(n_frames):
@@ -268,7 +358,7 @@ class VadStatusMonitor:
 
 
 class VadStatusBar(ttk.Frame):
-    """Thin persistent footer: colored dot + VAD state text."""
+    """Thin persistent footer: colored dot + VAD state text + mic level meter."""
 
     def __init__(self, parent, **kwargs):
         super().__init__(parent, **kwargs)
@@ -277,6 +367,8 @@ class VadStatusBar(ttk.Frame):
         self._dot.grid(row=0, column=0, sticky=tk.W, padx=(0, 4))
         self._text = ttk.Label(self, text="")
         self._text.grid(row=0, column=1, sticky=tk.W)
+        self._meter = MicLevelMeter(self)
+        self._meter.grid(row=0, column=2, sticky=tk.E, padx=(8, 0))
         self.set_state(STATE_LOADING)
 
     def set_state(self, state: str) -> None:
@@ -286,6 +378,9 @@ class VadStatusBar(ttk.Frame):
             self._text.config(text=text, foreground=color)
         except tk.TclError:
             pass
+
+    def set_level_db(self, db: float) -> None:
+        self._meter.set_level_db(db)
 
 
 class VadStatusMixin:
@@ -311,7 +406,10 @@ class VadStatusMixin:
                 device = selected_mic()
             except Exception:
                 device = None
-        self._vad_monitor = VadStatusMonitor(on_state=self._on_vad_state_change)
+        self._vad_monitor = VadStatusMonitor(
+            on_state=self._on_vad_state_change,
+            on_level=self._on_vad_level,
+        )
         self._vad_monitor.start(device=device)
         return self.vad_status_bar
 
@@ -327,6 +425,24 @@ class VadStatusMixin:
             bar = getattr(self, "vad_status_bar", None)
             if bar is not None:
                 bar.set_state(state)
+
+        try:
+            root.after(0, _update)
+        except Exception:
+            pass
+
+    def _on_vad_level(self, db: float) -> None:
+        """Called from the monitor thread (~20 Hz); marshal to the Tk main thread."""
+        root = getattr(self, "root", None)
+        if root is None:
+            return
+
+        def _update():
+            if getattr(self, "_shutting_down", False):
+                return
+            bar = getattr(self, "vad_status_bar", None)
+            if bar is not None:
+                bar.set_level_db(db)
 
         try:
             root.after(0, _update)
