@@ -680,6 +680,86 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         """Quit the application completely"""
         self.on_closing()
 
+    def _dismiss_exit_prompt(self, _event=None):
+        """Dismiss the confirm-exit dialog by minimizing to tray (X / Escape)."""
+        dialog = getattr(self, "_exit_prompt_dialog", None)
+        if dialog is None:
+            return
+        self._exit_prompt_open = False
+        self._exit_prompt_dialog = None
+        try:
+            dialog.grab_release()
+        except tk.TclError:
+            pass  # no grab was set (e.g. window not viewable)
+        dialog.destroy()
+        self.minimize_to_tray()
+
+    def confirm_exit(self):
+        """Prompt on window close: Quit app or Minimize to system tray.
+
+        Tk's native messagebox cannot relabel its Yes/No buttons, so use a
+        small modal Toplevel with explicit buttons instead. Dismissing the
+        dialog (X or Escape) minimizes to tray as the safe default.
+        """
+        if getattr(self, "_closing", False) or getattr(self, "_shutting_down", False):
+            return
+        if getattr(self, "_exit_prompt_open", False):
+            return  # dialog already showing; don't stack prompts
+        self._exit_prompt_open = True
+
+        dialog = tk.Toplevel(self.root)
+        self._exit_prompt_dialog = dialog
+        dialog.title("Confirm exit")
+        dialog.transient(self.root)
+        dialog.resizable(False, False)
+
+        message_label = ttk.Label(
+            dialog,
+            text="Quit the app, or minimize it to the system tray?",
+            padding=(16, 12, 16, 8),
+        )
+        message_label.grid(row=0, column=0, sticky=(tk.W, tk.E))
+
+        buttons_frame = ttk.Frame(dialog, padding=(16, 0, 16, 12))
+        buttons_frame.grid(row=1, column=0, sticky=(tk.W, tk.E))
+
+        def choose(action):
+            self._exit_prompt_open = False
+            self._exit_prompt_dialog = None
+            try:
+                dialog.grab_release()
+            except tk.TclError:
+                pass  # no grab was set (e.g. window not viewable)
+            dialog.destroy()
+            if action == "quit":
+                self.quit_app()
+            else:
+                self.minimize_to_tray()
+
+        quit_button = ttk.Button(buttons_frame, text="Quit app", command=lambda: choose("quit"))
+        quit_button.grid(row=0, column=0, padx=(0, 8))
+        minimize_button = ttk.Button(buttons_frame, text="Minimize to system tray", command=lambda: choose("minimize"))
+        minimize_button.grid(row=0, column=1)
+
+        # Dismissing the dialog keeps the app running in the tray.
+        dialog.protocol("WM_DELETE_WINDOW", self._dismiss_exit_prompt)
+        dialog.bind("<Escape>", self._dismiss_exit_prompt)
+        # Enter activates whichever button has focus.
+        quit_button.bind("<Return>", lambda _event: quit_button.invoke())
+        minimize_button.bind("<Return>", lambda _event: minimize_button.invoke())
+
+        # Center over the main window.
+        dialog.update_idletasks()
+        x = self.root.winfo_x() + max(0, (self.root.winfo_width() - dialog.winfo_reqwidth()) // 2)
+        y = self.root.winfo_y() + max(0, (self.root.winfo_height() - dialog.winfo_reqheight()) // 2)
+        dialog.geometry(f"+{x}+{y}")
+
+        try:
+            dialog.grab_set()  # modal; may fail if the window is not viewable yet
+        except tk.TclError:
+            pass
+        minimize_button.focus_set()
+
 
     # Resume _____________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________ #
     def setup_gui(self):
@@ -2935,7 +3015,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
     
 
     def on_closing(self):
-        """Handle application exit (tray Exit / SIGINT). Window X hides to tray instead."""
+        """Handle application exit (tray Exit / SIGINT / confirm-exit Quit). Window X prompts Quit / Minimize to tray."""
         if getattr(self, "_closing", False):
             return
         self._closing = True

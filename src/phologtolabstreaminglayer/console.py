@@ -30,7 +30,7 @@ def main(xdf_folder: Path, unsafe: bool = False):
 
     def on_window_close():
         if app is not None:
-            app.minimize_to_tray()
+            app.confirm_exit()
         else:
             root.destroy()
     root.protocol("WM_DELETE_WINDOW", on_window_close)
