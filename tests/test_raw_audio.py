@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import io
 import json
 import tempfile
 import threading
 import time
 import unittest
 import wave
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
 
 from phologtolabstreaminglayer.features.raw_audio import (
+    DEFAULT_SIDECAR_REFRESH_INTERVAL_S,
+    _SIDECAR_MAX_FAILURES,
     RawAudioRecorder,
     RecoverableWavWriter,
     format_audio_file_started,
@@ -22,6 +26,23 @@ from phologtolabstreaminglayer.features.raw_audio import (
 )
 from phologtolabstreaminglayer.logger_app import LoggerApp
 from whisper_timestamped.audio_capture import MicCaptureHub
+
+
+class _FakeMonotonic:
+    """Stand-in for the ``time`` module with a controllable monotonic clock."""
+
+    def __init__(self, start: float = 1000.0):
+        self._real_time = time
+        self._now = start
+
+    def monotonic(self) -> float:
+        return self._now
+
+    def advance(self, seconds: float) -> None:
+        self._now += float(seconds)
+
+    def __getattr__(self, name):
+        return getattr(self._real_time, name)
 
 
 class TestWavPath(unittest.TestCase):
@@ -94,6 +115,136 @@ class TestRecoverableWavWriter(unittest.TestCase):
             self.assertEqual(sidecar["frames_written"], 100)
             with wave.open(str(path), "rb") as wf:
                 self.assertEqual(wf.getnframes(), 100)
+
+
+class TestSidecarSpamSuppression(unittest.TestCase):
+    """A locked sidecar target (e.g. a Dropbox-synced folder) must not spam the console."""
+
+    def _writer_in(self, td: str) -> RecoverableWavWriter:
+        """Writer with an auto-close cleanup so a failing test cannot leak a handle."""
+        writer = RecoverableWavWriter(
+            Path(td) / "clip.wav", sample_rate=16000, header_patch_interval_s=0.0
+        )
+        self.addCleanup(self._quiet_close, writer)
+        return writer
+
+    @staticmethod
+    def _quiet_close(writer: RecoverableWavWriter) -> None:
+        with redirect_stdout(io.StringIO()):
+            writer.close(complete=False)
+
+    def test_periodic_sidecar_refresh_is_throttled(self):
+        fake = _FakeMonotonic()
+        original_write_text = Path.write_text
+        calls = {"n": 0}
+
+        def counting_write_text(self, *args, **kwargs):
+            calls["n"] += 1
+            return original_write_text(self, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as td:
+            writer = self._writer_in(td)
+            with patch.object(Path, "write_text", counting_write_text):
+                with patch("phologtolabstreaminglayer.features.raw_audio.time", fake):
+                    # Ten patch cycles inside one refresh interval => a single write.
+                    for _ in range(10):
+                        writer._patch_header_unlocked()
+                        writer._write_sidecar(complete=False, allow_throttle=True)
+                    self.assertEqual(calls["n"], 1)
+
+                    fake.advance(DEFAULT_SIDECAR_REFRESH_INTERVAL_S + 0.1)
+                    writer._write_sidecar(complete=False, allow_throttle=True)
+                    self.assertEqual(calls["n"], 2)
+                ## END with patch("...raw_audio.time", fake)....
+
+            # Explicit (non-throttled) refreshes always write, e.g. from patch_header().
+            writer._write_sidecar(complete=False)
+            self.assertEqual(calls["n"], 3)
+            ## END with patch.object(Path, "write_text", counting_write_text)....
+
+    def test_repeated_failures_warn_once_then_go_quiet(self):
+        fake = _FakeMonotonic()
+        out = io.StringIO()
+        err = PermissionError(5, "Access is denied")
+        with tempfile.TemporaryDirectory() as td:
+            writer = self._writer_in(td)
+            # Keep the atomic replace failing for every attempt.
+            with patch.object(Path, "replace", side_effect=err):
+                with patch("phologtolabstreaminglayer.features.raw_audio.time", fake):
+                    for _ in range(_SIDECAR_MAX_FAILURES * 3):
+                        with redirect_stdout(out):
+                            writer._write_sidecar(complete=False, allow_throttle=True)
+                        fake.advance(DEFAULT_SIDECAR_REFRESH_INTERVAL_S + 0.1)
+                    ## END for _ in range(_SIDECAR_MAX_FAILURES * 3)....
+                ## END with patch("...raw_audio.time", fake)....
+            ## END with patch.object(Path, "replace", side_effect=err)....
+        text = out.getvalue()
+        warnings = [ln for ln in text.splitlines() if "sidecar write failed" in ln]
+        # One rate-limited warning plus one terminal "suspending" notice; not one per cycle.
+        self.assertLessEqual(len(warnings), 2, text)
+        self.assertTrue(writer._sidecar_disabled)
+        self.assertGreaterEqual(writer._sidecar_failures, _SIDECAR_MAX_FAILURES)
+
+    def test_disabled_periodic_refresh_still_writes_final_sidecar(self):
+        """close()/patch_header() bypass the throttle so the final state is not lost."""
+        fake = _FakeMonotonic()
+        err = PermissionError(5, "Access is denied")
+        with tempfile.TemporaryDirectory() as td:
+            writer = self._writer_in(td)
+            with patch.object(Path, "replace", side_effect=err):
+                with patch("phologtolabstreaminglayer.features.raw_audio.time", fake):
+                    for _ in range(_SIDECAR_MAX_FAILURES + 1):
+                        with redirect_stdout(io.StringIO()):
+                            writer._write_sidecar(complete=False, allow_throttle=True)
+                        fake.advance(DEFAULT_SIDECAR_REFRESH_INTERVAL_S + 0.1)
+            ## END with patch.object(Path, "replace", side_effect=err)....
+            self.assertTrue(writer._sidecar_disabled)
+
+            # Lock released: an explicit (non-throttled) write must still land.
+            writer.write_float32(np.zeros(320, dtype=np.float32))
+            with redirect_stdout(io.StringIO()):
+                info = writer.close(complete=True)
+            self.assertTrue(info["complete"])
+            sidecar = json.loads(Path(td, "clip.json").read_text(encoding="utf-8"))
+            self.assertTrue(sidecar["complete"])
+            self.assertGreaterEqual(sidecar["frames_written"], 320)
+            self.assertFalse(writer._sidecar_disabled)
+
+
+class TestStreamDiscoveryBannerIsQuiet(unittest.TestCase):
+    """The vendored LabRecorder watch thread must not print the discovery banner."""
+
+    def test_find_streams_supports_debug_print(self):
+        import inspect
+
+        from labrecorder.recorder import LabRecorder
+        from labrecorder.streams.manager import StreamManager
+
+        for fn in (LabRecorder.find_streams, StreamManager.find_streams):
+            params = inspect.signature(fn).parameters
+            self.assertIn("debug_print", params, f"{fn.__qualname__} lacks debug_print")
+            # Default stays True for interactive/manual discovery; only the periodic
+            # watch thread passes debug_print=False.
+            self.assertTrue(params["debug_print"].default)
+
+    def test_watch_thread_suppresses_banner(self):
+        import inspect
+
+        from labrecorder import recorder as recorder_mod
+
+        source = inspect.getsource(recorder_mod.LabRecorder._watch_thread_func)
+        self.assertIn("debug_print=False", source)
+
+    def test_find_streams_prints_nothing_when_debug_print_false(self):
+        from labrecorder.streams.manager import StreamManager
+
+        manager = StreamManager()
+        out = io.StringIO()
+        with patch("labrecorder.streams.manager.pylsl.resolve_streams", return_value=[]):
+            with redirect_stdout(out):
+                result = manager.find_streams(timeout=0.01, debug_print=False)
+        self.assertEqual(result, [])
+        self.assertEqual(out.getvalue(), "")
 
 
 def _bare_app() -> LoggerApp:

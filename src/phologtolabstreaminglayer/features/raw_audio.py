@@ -30,7 +30,16 @@ DEFAULT_SAMPLE_RATE = 16000
 DEFAULT_CHANNELS = 1
 SAMPWIDTH = 2
 DEFAULT_HEADER_PATCH_INTERVAL_S = 1.0
+# Periodic sidecar refresh cadence. The RIFF header patch must stay frequent (it is
+# what keeps a killed recording playable), but the JSON sidecar is only metadata, so
+# it is refreshed on a slower cadence to cut sync-client contention and I/O.
+DEFAULT_SIDECAR_REFRESH_INTERVAL_S = 5.0
 _QUEUE_MAXSIZE = 100
+# A sync client (Dropbox/OneDrive) can hold a lock on the sidecar target, and the
+# sidecar is rewritten once per header patch. Without these guards a locked folder
+# prints the same warning every second for the whole recording.
+_SIDECAR_WARN_MIN_INTERVAL_S = 60.0
+_SIDECAR_MAX_FAILURES = 10
 
 
 def default_raw_audio_dir(xdf_folder: Union[str, Path]) -> Path:
@@ -107,6 +116,10 @@ class RecoverableWavWriter:
         self._frames_written = 0
         self._last_patch_monotonic = 0.0
         self._complete = False
+        self._sidecar_failures = 0
+        self._sidecar_disabled = False
+        self._last_sidecar_warn_monotonic: Optional[float] = None
+        self._last_sidecar_attempt_monotonic: Optional[float] = None
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._file = open(self.path, "wb")
         _write_wav_header(self._file, self.sample_rate, self.channels, self.sampwidth, 0)
@@ -147,7 +160,7 @@ class RecoverableWavWriter:
             interval = self.header_patch_interval_s
             if interval <= 0.0 or (now - self._last_patch_monotonic) >= interval:
                 self._patch_header_unlocked()
-                self._write_sidecar(complete=False)
+                self._write_sidecar(complete=False, allow_throttle=True)
 
     def patch_header(self) -> None:
         with self._lock:
@@ -215,7 +228,28 @@ class RecoverableWavWriter:
         snap.update(self._extra_meta)
         return snap
 
-    def _write_sidecar(self, complete: bool) -> None:
+    def _write_sidecar(self, complete: bool, *, allow_throttle: bool = False) -> None:
+        """Atomically refresh the sidecar JSON.
+
+        Args:
+            complete: Value for the sidecar ``complete`` flag.
+            allow_throttle: When True (periodic refresh from ``write_float32``) the
+                write may be skipped: either because one was just attempted, or
+                because repeated failures disabled periodic refreshes. Explicit
+                calls (close, patch_header, update_meta, detach) always attempt the
+                write so the final ``complete`` state is never lost.
+        """
+        now = time.monotonic()
+        if allow_throttle:
+            if self._sidecar_disabled:
+                return
+            last_attempt = self._last_sidecar_attempt_monotonic
+            if (
+                last_attempt is not None
+                and (now - last_attempt) < DEFAULT_SIDECAR_REFRESH_INTERVAL_S
+            ):
+                return
+        self._last_sidecar_attempt_monotonic = now
         payload = self._snapshot_unlocked()
         payload["complete"] = bool(complete)
         tmp = self.sidecar_path.with_suffix(".json.tmp")
@@ -223,12 +257,45 @@ class RecoverableWavWriter:
             tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             tmp.replace(self.sidecar_path)
         except Exception as e:
-            print(f"Warning: raw audio sidecar write failed: {e}")
+            self._sidecar_failures += 1
+            self._warn_sidecar_failure(e, now)
             try:
                 if tmp.exists():
                     tmp.unlink()
             except Exception:
                 pass
+        else:
+            self._sidecar_failures = 0
+            self._sidecar_disabled = False
+
+    def _warn_sidecar_failure(self, exc: Exception, now: float) -> None:
+        """Report sidecar write failures at most once per minute, then give up quietly.
+
+        The sidecar lives next to the XDF, which is often inside a sync-managed
+        folder (Dropbox/OneDrive). Those clients intermittently lock the target
+        file, so a per-second refresh can otherwise print the same warning for the
+        whole session. Audio writing and RIFF header patching are unaffected.
+        """
+        if self._sidecar_failures >= _SIDECAR_MAX_FAILURES:
+            if not self._sidecar_disabled:
+                self._sidecar_disabled = True
+                print(
+                    f"Warning: raw audio sidecar write failed {self._sidecar_failures} times "
+                    f"(last: {exc}); suspending periodic sidecar refresh for "
+                    f"{self.sidecar_path.name}. Audio recording continues normally."
+                )
+            return
+        if (
+            self._last_sidecar_warn_monotonic is not None
+            and (now - self._last_sidecar_warn_monotonic) < _SIDECAR_WARN_MIN_INTERVAL_S
+        ):
+            return
+        self._last_sidecar_warn_monotonic = now
+        print(
+            f"Warning: raw audio sidecar write failed: {exc} "
+            f"(failure {self._sidecar_failures}; further warnings suppressed for "
+            f"{int(_SIDECAR_WARN_MIN_INTERVAL_S)}s)"
+        )
 
 
 class RawAudioRecorder:
