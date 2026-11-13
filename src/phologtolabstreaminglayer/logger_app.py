@@ -36,6 +36,7 @@ from phologtolabstreaminglayer.features.raw_audio import (
     format_audio_file_stopped,
     wav_path_for_xdf_filename,
 )
+from phologtolabstreaminglayer.features.vad_status import VadStatusMixin
 
 mark("logger_app.py imports complete")
 
@@ -82,7 +83,7 @@ def get_default_xdf_folder() -> Path:
     return _resolved_default_xdf_folder
 
 
-class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, SystemTrayAppMixin, SingletonInstanceMixin, LiveWhisperTranscriptionAppMixin, EasyTimeSyncParsingMixin):
+class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, SystemTrayAppMixin, SingletonInstanceMixin, LiveWhisperTranscriptionAppMixin, EasyTimeSyncParsingMixin, VadStatusMixin):
     # Class variable to track if an instance is already running
     # _SingletonInstanceMixin_env_lock_port_variable_name: str = "LIVE_WHISPER_LOCK_PORT"
     _SingletonInstanceMixin_env_lock_file_name: str = "PHO_LOGTOLABSTREAMINGLAYER_LOCK_FILE"
@@ -129,6 +130,9 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         
         # Windows taskbar recording indicator
         self.init_RecordingIndicatorIconMixin()
+
+        # Persistent footer VAD status indicator
+        self.init_VadStatusMixin()
         
         # # Singleton lock socket
         # self._lock_socket = None
@@ -769,6 +773,7 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         self.root.rowconfigure(0, weight=1)  # Notebook row
         self.root.rowconfigure(1, weight=1)  # Log display row
         self.root.rowconfigure(2, weight=0)  # Console output row (collapsible, no weight)
+        self.root.rowconfigure(3, weight=0)  # VAD status footer (always visible, no weight)
 
         # Create tabbed notebook
         self.notebook = ttk.Notebook(self.root)
@@ -915,6 +920,10 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         # Create collapsible console output frame for stdout/stderr capture
         self.console_output_frame = ConsoleOutputFrame(self.root, root=self.root, capture_stdout=True, capture_stderr=True, max_lines=10000, initial_visible=False, height=8)
         self.console_output_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=10, pady=(0, 10))
+
+        # ------------------------- Persistent VAD Status Footer -------------------------
+        # Small always-visible voice-activity indicator (green while speech is detected)
+        self.setup_gui_VadStatusMixin(self.root, row=3)
 
 
     def refresh_audio_devices(self):
@@ -1174,6 +1183,8 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         label = self.audio_device_var.get()
         self.saved_mic_device_name = audio_device_name_from_label(label)
         self.save_live_audio_settings()
+        # Keep the footer VAD indicator on the same mic.
+        self.set_vad_device(self._selected_mic_device())
 
     def _default_recording_settings(self) -> Dict[str, Any]:
         return {
@@ -3039,6 +3050,9 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
         # Stop transcription if active
         if self.transcription_active:
             self.stop_live_transcription()
+
+        # Stop the footer VAD monitor (releases its mic hub listener)
+        self.cleanup_VadStatusMixin()
 
         # Stop recording if active
         if self.recording:

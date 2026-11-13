@@ -10,7 +10,7 @@ todos:
     status: completed
   - id: tests-and-verify
     content: Add tests/test_confirm_exit.py, run unittest, and smoke-test the close dialog manually
-    status: in_progress
+    status: completed
 isProject: false
 ---
 
