@@ -13,6 +13,7 @@ This module provides:
 import sys
 import tkinter as tk
 from tkinter import ttk, scrolledtext
+from tkinter import font as tkfont
 from typing import Optional, Callable, TextIO
 import threading
 import queue
@@ -233,6 +234,13 @@ class ConsoleOutputFrame(ttk.Frame):
         # Text display area
         self._text_area = scrolledtext.ScrolledText(self._content_frame, height=self._height, wrap=tk.WORD, state=tk.DISABLED)
         self._text_area.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(2, 0))
+
+        # Display console text at a compact 8pt size.
+        # Copy the widget's current font (keeps family/weight) and set the size.
+        # Keep a reference on self so the Tk font isn't garbage-collected.
+        self._console_font = tkfont.Font(font=self._text_area.cget("font"))
+        self._console_font.configure(size=8)  # positive size = points
+        self._text_area.configure(font=self._console_font)
         
         # Configure tags for stdout/stderr coloring
         self._text_area.tag_configure("stderr", foreground="red")
