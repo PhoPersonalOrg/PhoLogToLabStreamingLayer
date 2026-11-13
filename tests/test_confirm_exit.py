@@ -105,13 +105,12 @@ class TestConfirmExit(unittest.TestCase):
     def test_dialog_close_button_minimizes_to_tray(self):
         self.app.confirm_exit()
         dialog = self._dialog()
-        # The dialog's X must be wired to a WM_DELETE_WINDOW handler...
-        self.assertTrue(
-            dialog.protocol("WM_DELETE_WINDOW"),
-            "dialog must register a WM_DELETE_WINDOW handler",
-        )
-        # ...and the dismiss handler minimizes instead of quitting. Invoke it
-        # directly: synthetic WM events depend on OS focus and are flaky here.
+        # The dialog's X must be wired to the dismiss handler.
+        name = dialog.protocol("WM_DELETE_WINDOW")
+        self.assertTrue(name, "dialog must register a WM_DELETE_WINDOW handler")
+        self.assertIn("_dismiss_exit_prompt", name)
+        # Dismissing minimizes instead of quitting. Invoke the handler directly:
+        # synthetic WM events depend on OS focus and are flaky in test runs.
         self.app._dismiss_exit_prompt()
         self.assertEqual(self.app.quit_calls, 0)
         self.assertEqual(self.app.minimize_calls, 1)
