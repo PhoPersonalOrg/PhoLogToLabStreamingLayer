@@ -19,16 +19,16 @@ DOMAIN_INITIAL_PROMPT: str = (
 # Ordered (pattern, replacement). Longer / more specific phrases first.
 # Bare "log" is intentionally not rewritten — only boosted via hotwords.
 _DOMAIN_CORRECTION_SPECS: Sequence[Tuple[str, str]] = (
-    # Spoken / spelled 1.0+
+    # Spoken / spelled 1.0+ (allow Whisper spacing like "1 .0  plus")
     (r"\bone[\s-]+point[\s-]+(?:oh|o|zero)[\s-]+plus\b", "1.0+"),
     (r"\b1[\s-]*point[\s-]*(?:oh|o|zero)[\s-]*plus\b", "1.0+"),
-    (r"\b1\.0\s*plus\b", "1.0+"),
-    (r"\b1\.0\+\b", "1.0+"),
-    # Spoken / spelled 0.5+
+    (r"\b1\s*\.\s*0\s*(?:plus|\+)\b", "1.0+"),
+    (r"\b1\s*\.\s*0\+", "1.0+"),
+    # Spoken / spelled 0.5+ (allow Whisper spacing like "0 .5  plus")
     (r"\b(?:zero|oh|o)[\s-]+point[\s-]+five[\s-]+plus\b", "0.5+"),
     (r"\b0[\s-]*point[\s-]*five[\s-]*plus\b", "0.5+"),
-    (r"\b0\.5\s*plus\b", "0.5+"),
-    (r"\b0\.5\+\b", "0.5+"),
+    (r"\b0\s*\.\s*5\s*(?:plus|\+)\b", "0.5+"),
+    (r"\b0\s*\.\s*5\+", "0.5+"),
     # EEG (optional trailing period after spelled forms)
     (r"\bE[\s.-]*E[\s.-]*G\.?(?!\w)", "EEG"),
     (r"\beegee\b", "EEG"),
@@ -36,6 +36,7 @@ _DOMAIN_CORRECTION_SPECS: Sequence[Tuple[str, str]] = (
     # AMPH
     (r"\bA[\s.-]*M[\s.-]*P[\s.-]*H\.?(?!\w)", "AMPH"),
     (r"\bamph\b", "AMPH"),
+    (r"\bamp\b", "AMPH"),
     (r"\bamf\b", "AMPH"),
 )
 

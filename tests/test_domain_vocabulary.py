@@ -37,12 +37,20 @@ class TestApplyDomainCorrections(unittest.TestCase):
         )
         self.assertEqual(apply_domain_corrections("1.0 plus"), "1.0+")
         self.assertEqual(apply_domain_corrections("0.5 plus"), "0.5+")
+        self.assertEqual(apply_domain_corrections("1 .0  plus"), "1.0+")
+        self.assertEqual(apply_domain_corrections("0 .5  plus"), "0.5+")
+        self.assertEqual(
+            apply_domain_corrections("dose 0 .5  plus then 1 .0  plus"),
+            "dose 0.5+ then 1.0+",
+        )
 
     def test_eeg_and_amph_variants(self):
         self.assertEqual(apply_domain_corrections("check the eeg"), "check the EEG")
         self.assertEqual(apply_domain_corrections("E.E.G. channel"), "EEG channel")
         self.assertEqual(apply_domain_corrections("amph dose"), "AMPH dose")
+        self.assertEqual(apply_domain_corrections("AMP dose"), "AMPH dose")
         self.assertEqual(apply_domain_corrections("A-M-P-H"), "AMPH")
+        self.assertEqual(apply_domain_corrections("amplify signal"), "amplify signal")
 
     def test_bare_log_not_rewritten(self):
         self.assertEqual(apply_domain_corrections("write a log entry"), "write a log entry")
@@ -94,6 +102,23 @@ class TestApplyDomainCorrections(unittest.TestCase):
         out = apply_domain_corrections_to_emission(emission)
         self.assertIn("AMPH", out["text"])
         self.assertIn("0.5+", out["text"])
+
+    def test_spaced_decimal_plus_tokens(self):
+        emission = {
+            "text": "0 .5  plus then 1 .0  plus",
+            "words": [
+                {"text": "0", "start": 0.0, "end": 0.1},
+                {"text": ".5", "start": 0.1, "end": 0.2},
+                {"text": "plus", "start": 0.2, "end": 0.3},
+                {"text": "then", "start": 0.3, "end": 0.4},
+                {"text": "1", "start": 0.4, "end": 0.5},
+                {"text": ".0", "start": 0.5, "end": 0.6},
+                {"text": "plus", "start": 0.6, "end": 0.7},
+            ],
+        }
+        out = apply_domain_corrections_to_emission(emission)
+        self.assertEqual(out["text"], "0.5+ then 1.0+")
+
 
 
 if __name__ == "__main__":
