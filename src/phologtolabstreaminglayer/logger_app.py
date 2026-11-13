@@ -1241,8 +1241,20 @@ class LoggerApp(RecordingIndicatorIconMixin, GlobalHotkeyMixin, AppThemeMixin, S
 
     def setup_transcription_config(self):
         super().setup_transcription_config()
-        if getattr(self, "record_raw_audio", True) and self.transcription_config is not None:
-            self.transcription_config.write_audio_wav = False
+        cfg = self.transcription_config
+        if cfg is not None:
+            from phologtolabstreaminglayer.domain_vocabulary import (
+                apply_domain_corrections_to_emission,
+                get_hotwords,
+                get_initial_prompt,
+            )
+
+            cfg.hotwords = get_hotwords()
+            cfg.initial_prompt = get_initial_prompt()
+            cfg.emission_corrector = apply_domain_corrections_to_emission
+            if getattr(self, "record_raw_audio", True):
+                cfg.write_audio_wav = False
+        ## END if cfg is not None....
 
     def get_default_eventboard_config(self):
         """Get default EventBoard configuration"""
