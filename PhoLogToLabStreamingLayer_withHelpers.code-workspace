@@ -17,6 +17,12 @@
 		},
 		{
 			"path": "../LSL"
+		},
+		{
+			"path": "../PhoPyMNEHelper"
+		},
+		{
+			"path": "../App-LabRecorder"
 		}
 	],
 	"settings": {
@@ -132,5 +138,6 @@
 				"editorIndentGuide.activeBackground5": "#33ff3386",
 				"editorIndentGuide.activeBackground6": "#ebffeb86"
 			},
+			"specstory.cloudSync.enabled": "never",
 	}
 }
