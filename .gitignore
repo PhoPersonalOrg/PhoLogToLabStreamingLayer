@@ -24,3 +24,4 @@ EXTERNAL/PhoPyLSLhelper
 
 # Machine-local Live Audio mic preference
 live_audio_settings.json
+data/_dual_recorder_self_test
